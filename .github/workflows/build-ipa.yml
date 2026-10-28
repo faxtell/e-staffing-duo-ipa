@@ -1,0 +1,57 @@
+name: Build iPhone Duo IPA (iOS 27.1)
+on:
+  push:
+    branches: [main]
+    paths: ['project.zip']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Build unsigned IPA with iOS 27.1 SDK
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s project.zip || { echo "::error::Upload project.zip to the repository first"; exit 1; }
+          echo '8caf4a18c14719b8b5f1f65fdbcaa73ca1f9e77123eaf2549040fec1b3144f1a  project.zip' | shasum -a 256 -c -
+          mkdir -p source
+          unzip -q project.zip -d source
+          test -f source/scripts/build-unsigned-ipa.sh
+      - name: Select Xcode 27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.1 not found"; exit 1; }
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          xcodebuild -version
+          version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "iPhoneOS SDK: $version"
+          test "$version" = 27.1 || { echo "::error::Expected iOS 27.1 SDK"; exit 1; }
+      - name: Validate JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in source/EStaffingTimeCard/Resources/*.js; do node --check "$file"; done
+      - name: Build unsigned IPA
+        shell: bash
+        run: cd source && bash scripts/build-unsigned-ipa.sh
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EStaffingTimeCard-Duo-iOS27.1-unsigned
+          path: source/BuildOutput/EStaffingTimeCard-Duo-iOS27.1-unsigned.ipa
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: source/BuildOutput/build.log
+          if-no-files-found: ignore
