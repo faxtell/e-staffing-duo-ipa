@@ -18,7 +18,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s project.zip || { echo "::error::Upload project.zip to the repository first"; exit 1; }
-          echo 'a3502076e95750f354aa447d7dd75bd52f1ce887c3f932cce36132450effbcba  project.zip' |echo 'a3502076e95750f354aa447d7dd75bd52f1ce887c3f932cce36132450effbcba  project.zip' | shasum -a 256 -c -
+          echo 'a3502076e95750f354aa447d7dd75bd52f1ce887c3f932cce36132450effbcba  project.zip' |echo 'a3502076e95750f354aa447d7dd75bd52f1ce887c3f932cce36132450effbcba  project.zip' |          echo '84fb79e670af6d487c2d3486c480edc7f8caa72ad591666d44e4904e0deb08b2  project.zip' | shasum -a 256 -c -
           mkdir -p source
           unzip -q project.zip -d source
           test -f source/scripts/build-unsigned-ipa.sh
@@ -50,6 +50,9 @@ jobs:
       - name: Test navigation and dashboard refresh
         shell: bash
         run: cd source && node tests/navigation-regression.test.cjs && node tests/dashboard-refresh.test.cjs
+      - name: Test daily overtime calculations
+        shell: bash
+        run: cd source && node tests/overtime-dashboard.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
