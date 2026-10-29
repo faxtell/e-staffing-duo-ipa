@@ -18,7 +18,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s project.zip || { echo "::error::Upload project.zip to the repository first"; exit 1; }
-          echo 'd3c62dc816a2c0514394486a6aeeb3410923b2e34dab7285f85184e6c4f5ee66  project.zip' | shasum -a 256 -c -
+          echo 'c4c40f55f4e400c0bc50b080ae5ccca1508b39e9b6ee1fd432189a396b1b68aa  project.zip' | shasum -a 256 -c -
           mkdir -p source
           unzip -q project.zip -d source
           test -f source/scripts/build-unsigned-ipa.sh
