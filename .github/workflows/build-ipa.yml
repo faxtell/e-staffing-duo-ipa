@@ -18,7 +18,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s project.zip || { echo "::error::Upload project.zip to the repository first"; exit 1; }
-          echo '730de9dab22d6061e87b9f3566508c148839965bc19e26e77a6adeb82e84447b  project.zip' | shasum -a 256 -c -
+          echo '81a9a7ac82793710233f9edcf1f20ed2821dc43fc9dd0683d421ddd6cf63367d  project.zip' | shasum -a 256 -c -
           mkdir -p source
           unzip -q project.zip -d source
           test -f source/scripts/build-unsigned-ipa.sh
@@ -62,13 +62,16 @@ jobs:
       - name: Test salary settings and calendar routing
         shell: bash
         run: cd source && node tests/salary-calendar.test.cjs
+      - name: Test payroll and native time routing
+        shell: bash
+        run: cd source && node tests/payroll-time-routing.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EStaffingTimeCard-Duo-v2.9.6-iOS27.1-unsigned
+          name: EStaffingTimeCard-Duo-v2.9.7-iOS27.1-unsigned
           path: source/BuildOutput/EStaffingTimeCard-Duo-iOS27.1-unsigned.ipa
           retention-days: 7
           if-no-files-found: error
