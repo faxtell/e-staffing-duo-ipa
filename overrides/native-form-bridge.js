@@ -80,6 +80,15 @@
       return false;
     }
   };
+  window.__etcNativeSubmissionCancel = () => {
+    if (!submissionLocked) return false;
+    submissionLocked = false;
+    delete submissionForm.dataset.etcNativeSubmitBusy;
+    post({action:'submissionState',kind:submissionKind,status:'cancelled',
+          message:'公式確認画面で申請をキャンセルしました。送信していません。'});
+    submissionSnapshot();
+    return true;
+  };
   submissionSnapshot();
   if (!form) return;
   const fieldNames = ['startTime','endTime','rstTime','nightRstTime','remark'];
