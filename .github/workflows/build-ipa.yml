@@ -111,6 +111,9 @@ jobs:
       - name: Test tabletop layout polish (v3.6)
         shell: bash
         run: cd source && node tests/tabletop-polish-v36.test.cjs
+      - name: Test native daily and closing applications (v3.7)
+        shell: bash
+        run: cd source && node tests/native-submission-v37.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
