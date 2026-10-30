@@ -23,6 +23,15 @@ struct NativeApplicationScreen: View {
     }
 }
 
+// Keep the iOS 27.1-only fold API behind an availability check; the app's
+// deployment target also supports earlier iOS versions.
+private func duoDivisionFrame(in proxy: GeometryProxy) -> CGRect? {
+    if #available(iOS 27.1, *) {
+        return proxy.reservedRegions(kind: .division).first?.frame
+    }
+    return nil
+}
+
 private struct NativeSurface<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -334,7 +343,7 @@ struct NativeDailyScreen: View {
     }
     var body: some View {
         GeometryReader { proxy in
-            let fold = proxy.reservedRegions(kind: .division).first?.frame
+            let fold = duoDivisionFrame(in: proxy)
             if let fold, fold.height > fold.width,
                fold.minX >= 270, proxy.size.width - fold.maxX >= 270 {
                 // Book pose: start/end, forecast and break on the first leaf;
@@ -668,7 +677,7 @@ struct NativeClosingScreen: View {
     var body: some View {
         GeometryReader { proxy in
             let expanded = proxy.size.width >= 690
-            let fold = proxy.reservedRegions(kind: .division).first?.frame
+            let fold = duoDivisionFrame(in: proxy)
             if model.calendarMonth.count == 7, let fold,
                fold.height > fold.width,
                fold.minX >= 320, proxy.size.width - fold.maxX >= 320 {
