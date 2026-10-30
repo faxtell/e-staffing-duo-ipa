@@ -29,6 +29,12 @@ jobs:
           if test -f overrides/NativeScreens.swift; then
             cp overrides/NativeScreens.swift source/EStaffingTimeCard/NativeScreens.swift
           fi
+          if test -f overrides/TimeCardView.swift; then
+            cp overrides/TimeCardView.swift source/EStaffingTimeCard/TimeCardView.swift
+          fi
+          if test -f overrides/native-form-bridge.js; then
+            cp overrides/native-form-bridge.js source/EStaffingTimeCard/Resources/native-form-bridge.js
+          fi
           if test -d overrides/tests; then
             cp overrides/tests/*.cjs source/tests/
           fi
@@ -105,6 +111,9 @@ jobs:
       - name: Test tabletop layout polish (v3.6)
         shell: bash
         run: cd source && node tests/tabletop-polish-v36.test.cjs
+      - name: Test native daily and closing applications (v3.7)
+        shell: bash
+        run: cd source && node tests/native-submission-v37.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
