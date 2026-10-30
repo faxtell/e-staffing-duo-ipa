@@ -198,6 +198,134 @@ struct NativeDailyScreen: View {
     private func duration(_ total: Int) -> String {
         total % 60 == 0 ? "\(total / 60)時間" : "\(total / 60)時間\(total % 60)分"
     }
+    private func readOnlyTime(_ name: String) -> String {
+        let raw = field(name).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard raw.count == 4, let hour = Int(raw.prefix(2)),
+              let minute = Int(raw.suffix(2)), hour < 24, minute < 60 else {
+            return raw.isEmpty ? "—" : raw
+        }
+        return String(format: "%02d:%02d", hour, minute)
+    }
+    private func readOnlyValue(_ name: String, suffix: String = "") -> String {
+        let raw = field(name).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return "—" }
+        return raw + (suffix.isEmpty || raw.hasSuffix(suffix) ? "" : suffix)
+    }
+    private func lockedRow(_ title: String, value: String, icon: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(.secondary)
+                .frame(width: 21)
+            Text(title).foregroundStyle(.secondary)
+            Spacer(minLength: 6)
+            Text(value).fontWeight(.semibold)
+                .monospacedDigit()
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
+        .padding(.vertical, 5)
+    }
+    private var lockedDailyInfo: some View {
+        Label(model.nativeDailyApprovalStatus.isEmpty
+              ? "この記録は編集できません"
+              : "\(model.nativeDailyApprovalStatus)・編集できません",
+              systemImage: "lock.fill")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("daily-approved-lock-banner")
+    }
+    private var dailyReadOnlyCard: some View {
+        NativeSurface(title: "記録済みの勤務内容") {
+            lockedDailyInfo
+            Divider()
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("開始").font(.caption).foregroundStyle(.secondary)
+                    Text(readOnlyTime("startTime"))
+                        .font(.system(.title2, design: .rounded, weight: .semibold))
+                        .monospacedDigit()
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("終了").font(.caption).foregroundStyle(.secondary)
+                    Text(readOnlyTime("endTime"))
+                        .font(.system(.title2, design: .rounded, weight: .semibold))
+                        .monospacedDigit()
+                }
+            }
+            .accessibilityIdentifier("daily-approved-recorded-times")
+            Divider()
+            lockedRow("休憩", value: readOnlyValue("rstTime",suffix:"分"), icon: "cup.and.saucer")
+            if !field("nightRstTime").isEmpty {
+                lockedRow("深夜休憩", value: readOnlyValue("nightRstTime",suffix:"分"), icon: "moon")
+            }
+            lockedRow("区分", value: model.nativeDailyCategoryDisplay.isEmpty
+                      ? "—" : model.nativeDailyCategoryDisplay, icon: "square.grid.2x2")
+            lockedRow("就業場所", value: model.nativeDailyWorkplaceDisplay.isEmpty
+                      ? "—" : model.nativeDailyWorkplaceDisplay, icon: "building.2")
+            if !field("remark").isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("備考").font(.caption).foregroundStyle(.secondary)
+                    Text(field("remark")).font(.subheadline)
+                }
+            }
+            if field("startTime").isEmpty && field("endTime").isEmpty {
+                Label("公式画面で表示されている勤務記録を確認してください。",
+                      systemImage: "info.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("daily-approved-readonly-card")
+    }
+    private var dailyLockedActions: some View {
+        Button { model.showOfficial = true } label: {
+            Label("公式画面で記録を確認", systemImage: "arrow.up.right.square")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered).controlSize(.large)
+        .accessibilityIdentifier("daily-approved-official-link")
+    }
+    private var tabletopLockedDashboard: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("日々勤怠").font(.headline)
+                if !model.nativeDayTitle.isEmpty {
+                    Text(model.nativeDayTitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Label(model.nativeDailyApprovalStatus.isEmpty
+                      ? "閲覧のみ" : model.nativeDailyApprovalStatus,
+                      systemImage: "lock.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 18) {
+                    VStack(alignment: .leading) {
+                        Text("開始").font(.caption).foregroundStyle(.secondary)
+                        Text(readOnlyTime("startTime")).font(.system(.title2, design: .rounded, weight: .bold))
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing) {
+                        Text("終了").font(.caption).foregroundStyle(.secondary)
+                        Text(readOnlyTime("endTime")).font(.system(.title2, design: .rounded, weight: .bold))
+                    }
+                }.monospacedDigit()
+            }
+            .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("daily-approved-tabletop-dashboard")
+    }
+    private var tabletopLockedDetails: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                dailyReadOnlyCard
+                dailyLockedActions
+            }
+            .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+        }
+        .accessibilityIdentifier("daily-approved-tabletop-details")
+    }
     // iOS 27.1 reports an active reserved division when Duo is partly folded.
     // Divide the *actual* available view rectangle; do not infer a fold from
     // orientation, window size or device identifiers.
@@ -343,7 +471,11 @@ struct NativeDailyScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 dailyHeading
-                dailyWorkCard
+                if model.nativeDailyLocked {
+                    dailyReadOnlyCard
+                } else {
+                    dailyWorkCard
+                }
             }
             .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
         }
@@ -352,8 +484,13 @@ struct NativeDailyScreen: View {
     private var dailyEditPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
-                dailyDetailsCard
-                dailyActions
+                if model.nativeDailyLocked {
+                    lockedDailyInfo
+                    dailyLockedActions
+                } else {
+                    dailyDetailsCard
+                    dailyActions
+                }
             }
             .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
         }
@@ -542,18 +679,31 @@ struct NativeDailyScreen: View {
                       fold.minY >= 145, proxy.size.height - fold.maxY >= 145 {
                 // Tabletop pose: touch controls live on the stable lower leaf.
                 VStack(spacing: 0) {
-                    tabletopDailyDashboard.frame(height: max(0, fold.minY))
+                    if model.nativeDailyLocked {
+                        tabletopLockedDashboard.frame(height: max(0, fold.minY))
+                    } else {
+                        tabletopDailyDashboard.frame(height: max(0, fold.minY))
+                    }
                     Color.clear.frame(height: max(0, fold.height))
-                    tabletopDailyEditor.frame(height: max(0, proxy.size.height - fold.maxY))
+                    if model.nativeDailyLocked {
+                        tabletopLockedDetails.frame(height: max(0, proxy.size.height - fold.maxY))
+                    } else {
+                        tabletopDailyEditor.frame(height: max(0, proxy.size.height - fold.maxY))
+                    }
                 }
                 .accessibilityIdentifier("daily-fold-tabletop")
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
                         dailyHeading
-                        dailyWorkCard
-                        dailyDetailsCard
-                        dailyActions
+                        if model.nativeDailyLocked {
+                            dailyReadOnlyCard
+                            dailyLockedActions
+                        } else {
+                            dailyWorkCard
+                            dailyDetailsCard
+                            dailyActions
+                        }
                     }
                     .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
                 }
@@ -637,7 +787,7 @@ struct ClosingMonthData {
 private func closingStatus(_ record: NativeCalendarRecord?) -> String {
     guard let item=record else { return "未取得" }
     if !item.known { return "未取得" }
-    if item.leave { return item.status.isEmpty ? "有給休暇" : item.status }
+    if item.leave { return "年休" } // Leave type must not be replaced by approval status ("済").
     if item.work { return item.status.isEmpty ? "勤務記録あり" : item.status }
     return item.holiday.isEmpty ? "記録なし" : item.holiday
 }
@@ -670,11 +820,11 @@ struct NativeClosingList: View {
                             .fill(row?.leave == true ? Color.purple : row?.work == true ? .green : .clear)
                             .frame(width:3)
                         VStack(alignment:.leading,spacing:5) {
-                            Text(row?.work == true && !(row?.hours.isEmpty ?? true) ? row!.hours : closingStatus(row))
+                            Text(row?.leave == true ? "年休" : row?.work == true && !(row?.hours.isEmpty ?? true) ? row!.hours : closingStatus(row))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary).lineLimit(2)
                             let detail=[row?.place ?? "",(row?.rest.isEmpty == false ? "休憩 \(row!.rest)" : ""),
-                                        (row?.work == true ? row?.status ?? "" : "")]
+                                        (row?.known == true ? row?.status ?? "" : "")]
                                 .filter{ !$0.isEmpty }.joined(separator:" · ")
                             if !detail.isEmpty {
                                 Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -741,7 +891,7 @@ struct NativeClosingMonthCalendar: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("\(day)").font(.subheadline.weight(.bold))
                     .foregroundStyle(row?.holiday.isEmpty == false ? Color.red : Color.primary)
-                if row?.work == true {
+                if row?.work == true && row?.leave != true {
                     Text(row?.hours ?? "")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.primary).lineLimit(2).minimumScaleFactor(0.75)
@@ -806,8 +956,8 @@ private struct NativeClosingTabletopCalendar: View {
                                         .monospacedDigit()
                                         .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
                                     Circle()
-                                        .fill(record?.work == true ? Color.green :
-                                              record?.leave == true ? Color.purple : Color.clear)
+                                        .fill(record?.leave == true ? Color.purple :
+                                              record?.work == true ? Color.green : Color.clear)
                                         .frame(width: 4, height: 4)
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 29)

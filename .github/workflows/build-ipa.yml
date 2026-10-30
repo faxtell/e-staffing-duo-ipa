@@ -114,6 +114,9 @@ jobs:
       - name: Test native daily and closing applications (v3.7)
         shell: bash
         run: cd source && node tests/native-submission-v37.test.cjs
+      - name: Test approved read-only attendance and leave labels (v3.8)
+        shell: bash
+        run: cd source && node tests/approved-readonly-v38.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh

@@ -54,6 +54,7 @@
     period: submissionPeriod(), available: nativeSubmissionReady()
   });
   window.__etcNativeSubmission = payload => {
+    if (form && isLocked()) return false;
     if (!payload || payload.kind !== 'submit' || payload.form !== submissionKind ||
         payload.confirmed !== true || typeof payload.period !== 'string' ||
         payload.period !== submissionPeriod() || !nativeSubmissionReady()) return false;
@@ -89,8 +90,7 @@
     submissionSnapshot();
     return true;
   };
-  submissionSnapshot();
-  if (!form) return;
+  if (!form) { submissionSnapshot(); return; }
   const fieldNames = ['startTime','endTime','rstTime','nightRstTime','remark'];
   let busy = false, timer = null, revision = 0, failed = false, lastState = '';
   const text = e => String(e?.textContent || e?.value || '').trim().replace(/\s+/g,' ').slice(0,90);
@@ -114,9 +114,79 @@
   const field = name => form.elements.namedItem(name);
   const dateText = () => text(form.querySelector('.etc-today-status')) || text(form.querySelector('.etc-period'));
   let cachedDate = dateText();
-  const values = () => Object.fromEntries(fieldNames.map(name=>[name, typeof field(name)?.value==='string' ? field(name).value.slice(0,120) : '']));
+  // Approved records use text cells instead of editable form inputs. Read only
+  // the labels displayed by the official page; never invent a default value.
+  const clean = value => String(value || '').replace(/\s+/g,' ').trim().slice(0,120);
+  const statusText = () => {
+    const heading = [form.querySelector('.etc-today-status'),form.querySelector('.etc-period'),
+                     ...[...form.querySelectorAll('div,span')].filter(e =>
+                       e.children.length === 0 && clean(e.textContent).length < 90)];
+    const s = heading.map(e => clean(e?.textContent)).find(x => /承認済|申請済|差戻|申請中|作成中/.test(x));
+    const found = s?.match(/承認済|申請済|差戻|申請中|作成中/);
+    return found ? found[0] : '';
+  };
+  const editableField = name => {
+    const el = field(name);
+    return el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || '') &&
+      !el.disabled && !el.readOnly;
+  };
+  // Status alone is authoritative for approved records. Also protect any
+  // record with no actual writable attendance controls.
+  const isLocked = () => /承認済/.test(statusText()) ||
+    (fieldNames.filter(n=>n!=='remark'&&n!=='nightRstTime').every(n=>!editableField(n)) &&
+     !form.querySelector('input[name="temStorage"]:not([disabled]),button[name="temStorage"]:not([disabled])'));
+  const labeledValue = words => {
+    for (const row of form.querySelectorAll('tr')) {
+      const cells = [...row.querySelectorAll(':scope > th,:scope > td')];
+      if (cells.length < 2) continue;
+      const label = clean(cells[0].textContent);
+      if (!words.some(w => label.includes(w))) continue;
+      const cell = cells.slice(1).find(e => clean(e.textContent));
+      if (cell) return clean(cell.textContent);
+    }
+    for (const dt of form.querySelectorAll('dt')) {
+      if (words.some(w => clean(dt.textContent).includes(w))) {
+        const sibling=dt.nextElementSibling;
+        if(sibling && sibling.tagName==='DD') return clean(sibling.textContent);
+      }
+    }
+    return '';
+  };
+  const displayValue = name => {
+    const fromInput = field(name);
+    if (fromInput && typeof fromInput.value === 'string' && fromInput.value.trim()) return fromInput.value.slice(0,120);
+    const labels = {
+      startTime:['開始','出勤'], endTime:['終了','退勤'],
+      rstTime:['休憩時間','休憩'],nightRstTime:['深夜休憩'],
+      remark:['備考']
+    };
+    const raw=labeledValue(labels[name] || []);
+    if (name==='startTime'||name==='endTime') {
+      const match=raw.replace(/[：:]/g,'').match(/(?:^|\D)([01]\d|2[0-3])([0-5]\d)(?:\D|$)/);
+      return match ? match[1]+match[2] : '';
+    }
+    if(name==='rstTime'||name==='nightRstTime'){
+      const match=raw.match(/\b(\d{1,3})\s*(?:分)?\b/);
+      return match ? match[1] : '';
+    }
+    return raw;
+  };
+  const optionsSnapshot = (row, which) => {
+    const result=optionsFor(row);
+    const displayed=labeledValue(which==='category'?['区分']:['就業場所']);
+    const selected=result.options.filter(option=>option.selected).map(option=>option.label).join('・');
+    // Some approved forms keep their disabled select/radio in the DOM.
+    // Preserve their selected text alongside the display-only cell fallback.
+    return {...result,value:displayed || selected};
+  };
+  const values = () => Object.fromEntries(fieldNames.map(name=>[name, displayValue(name)]));
   function sendSnapshot() {
-    const data={action:'dailySnapshot',date:dateText().slice(0,100),fields:values(),category:optionsFor(category()),workplace:optionsFor(workplace()),autosave:status(),canSave:!!form.querySelector('input[name="temStorage"]:not([disabled]),button[name="temStorage"]:not([disabled])')};
+    const locked=isLocked();
+    const data={action:'dailySnapshot',date:dateText().slice(0,100),fields:values(),
+      category:optionsSnapshot(category(),'category'),workplace:optionsSnapshot(workplace(),'workplace'),
+      readOnly:locked,approvalStatus:statusText(),
+      autosave:locked?'locked':status(),
+      canSave:!locked&&!!form.querySelector('input[name="temStorage"]:not([disabled]),button[name="temStorage"]:not([disabled])')};
     post(data);
   }
   function status() {return busy?'sending':failed?'error':timer?'pending':lastState||'idle';}
@@ -129,14 +199,14 @@
     return /^\d{4}$/.test(start) && /^\d{4}$/.test(end) && !busy && !failed;
   }
   function schedule() {
-    if(busy || failed) return;
+    if(isLocked() || busy || failed) return;
     revision++;
     clearTimeout(timer);
     updateStatus('pending');
     timer=setTimeout(() => {timer=null;sendTemporarySave();},2400);
   }
   function sendTemporarySave() {
-    if(busy || failed)return false;
+    if(isLocked() || busy || failed)return false;
     const temp=form.querySelector('input[name="temStorage"]:not([disabled]),button[name="temStorage"]:not([disabled])');
     if(!temp || !isComplete()) {updateStatus('local');sendSnapshot();return false;}
     if(!(temp instanceof HTMLInputElement || temp instanceof HTMLButtonElement)) return false;
@@ -155,6 +225,7 @@
   // Original source fields continue to be the only fields submitted to the official server.
   const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
   function setValue(name,value){
+    if(isLocked())return false;
     if(!fieldNames.includes(name)||typeof value!=='string'||value.length>120)return false;
     const input=field(name);if(!input || !('value' in input))return false;
     if(name==='startTime'||name==='endTime') {
@@ -168,6 +239,7 @@
     schedule();sendSnapshot();submissionSnapshot();return true;
   }
   function selectOption(which,index){
+    if(isLocked())return false;
     if(!['category','workplace'].includes(which)||!Number.isInteger(index)||index<0||index>30)return false;
     const row=which==='category'?category():workplace();if(!row)return false;
     const select=row.querySelector('select');
@@ -192,6 +264,7 @@
     if(payload.kind==='field') { const updated=setValue(payload.name,payload.value); if(updated) submissionSnapshot(); return updated; }
     if(payload.kind==='choice')return selectOption(payload.group,payload.index);
     if(payload.kind==='breakRecalculate') {
+      if(isLocked())return false;
       const button=form.querySelector('.etc-break-assistant-button');
       if(!button || button.disabled) return false;
       button.click(); sendSnapshot(); return true;
@@ -202,7 +275,7 @@
   };
   let handling = false;
   const capture = event => {
-    if(handling||busy||failed)return;
+    if(handling||isLocked()||busy||failed)return;
     if(!event.target || !form.contains(event.target) || !event.isTrusted)return;
     if(event.target.closest('input[name="apply"],input[name="temStorage"],button[type=submit]'))return;
     handling=true;
@@ -221,5 +294,5 @@
     sessionStorage.removeItem('etc-v30-temp-pending');
     try{const obj=JSON.parse(old);if(Date.now()-obj.at<25000 && obj.date===cachedDate)lastState='verify';}catch(_){}
   }
-  sendSnapshot();
+  sendSnapshot();submissionSnapshot();
 })();
