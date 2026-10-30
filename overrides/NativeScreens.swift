@@ -117,6 +117,7 @@ struct NativeHomeScreen: View {
 struct NativeDailyScreen: View {
     @ObservedObject var model: NativeNavigationModel
     @State private var confirmedApply = false
+    @State private var tabletopDetailsExpanded = false
     // The forecast and the official break field share a single source of truth.
     @AppStorage("etc-duo-v33.shift.netMinutes") private var shiftNetMinutes = 450
     @AppStorage("etc-duo-v33.shift.breakMinutes") private var plannedBreakMinutes = 60
@@ -341,6 +342,165 @@ struct NativeDailyScreen: View {
         }
         .accessibilityIdentifier("daily-fold-edit-pane")
     }
+
+    // Tabletop posture uses the upper leaf as a glanceable dashboard and
+    // the lower leaf as a touch-first editor. Neither leaf overlaps the hinge.
+    private func tabletopDailyMetric(_ title: String, value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: icon)
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(value)
+                .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.72)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 14))
+    }
+    private var tabletopDailyDashboard: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("日々勤怠").font(.headline)
+                        if !model.nativeDayTitle.isEmpty {
+                            Text(model.nativeDayTitle)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Label("退勤予定", systemImage: "clock.badge.checkmark")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(expectedEndTime ?? "—")
+                        .font(.system(size: 40, weight: .bold, design: .rounded))
+                        .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+                        .accessibilityIdentifier("tabletop-daily-forecast")
+                    Spacer(minLength: 6)
+                    Text("開始時刻＋実働目標＋休憩")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(2).multilineTextAlignment(.trailing)
+                }
+                HStack(spacing: 8) {
+                    tabletopDailyMetric("目標実働", value: duration(shiftNetMinutes), icon: "timer")
+                    tabletopDailyMetric("休憩", value: "\(previewRestMinutes)分", icon: "cup.and.saucer")
+                    tabletopDailyMetric("実労働", value: actualWorkMinutes.map(duration) ?? "—", icon: "clock")
+                }
+                if let required = legalMinimumMinutes, let entered = enteredRestMinutes,
+                   entered < required {
+                    Label("必要な休憩は\(required)分。休憩時間を確認してください。",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .frame(maxWidth: 750).frame(maxWidth: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("daily-tabletop-dashboard")
+    }
+    private var tabletopDailyEditor: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("勤怠を編集", systemImage: "square.and.pencil")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("変更は自動保存")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 12) {
+                        timeItem("開始", name: "startTime")
+                        timeItem("終了", name: "endTime")
+                    }
+                    HStack(spacing: 8) {
+                        Label("休憩", systemImage: "cup.and.saucer")
+                            .font(.subheadline.weight(.medium))
+                        Spacer(minLength: 2)
+                        Menu {
+                            ForEach([0,30,45,60,90,120], id: \.self) { rest in
+                                Button {
+                                    updateBreakMinutes(rest)
+                                } label: {
+                                    Label("\(rest)分",
+                                          systemImage: previewRestMinutes == rest ? "checkmark.circle.fill" : "clock")
+                                }
+                            }
+                        } label: {
+                            Label("\(previewRestMinutes)分", systemImage: "chevron.down")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        TextField("分", text: Binding(
+                            get: { field("rstTime") },
+                            set: { model.nativeFormAction(["kind":"field","name":"rstTime","value":$0]) }
+                        ))
+                        .keyboardType(.numbersAndPunctuation)
+                        .multilineTextAlignment(.trailing)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 66)
+                        .accessibilityIdentifier("tabletop-daily-break-input")
+                        Text("分").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if enteredRestMinutes == nil ||
+                       (recommendedRestMinutes != nil &&
+                        (enteredRestMinutes ?? 0) < (recommendedRestMinutes ?? 0)) {
+                        Button {
+                            model.nativeFormAction(["kind":"breakRecalculate"])
+                        } label: {
+                            Label("休憩の目安を入力", systemImage: "arrow.clockwise")
+                        }
+                        .font(.caption).buttonStyle(.bordered).controlSize(.small)
+                    }
+                    DisclosureGroup(isExpanded: $tabletopDetailsExpanded) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            dailyDetailsCard
+                            if model.nativeDailyFields["nightRstTime"] != nil &&
+                               !field("nightRstTime").isEmpty {
+                                fieldEntry("深夜休憩", name: "nightRstTime")
+                            }
+                        }
+                        .padding(.top, 10)
+                    } label: {
+                        Label("区分・就業場所・備考", systemImage: "slider.horizontal.3")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .accessibilityIdentifier("tabletop-daily-details")
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .frame(maxWidth: 750).frame(maxWidth: .infinity)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            Divider()
+            HStack(spacing: 8) {
+                Label(saveText,
+                      systemImage: model.nativeSaveState == "error" ? "exclamationmark.triangle" : "checkmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(model.nativeSaveState == "error" ? Color.orange : Color.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 2)
+                if model.nativeCanSave {
+                    Button("保存") { model.nativeFormAction(["kind":"save"]) }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(model.nativeSaveState == "sending")
+                }
+                Button { model.showOfficial = true } label: {
+                    Label("詳細・申請", systemImage: "arrow.up.right")
+                }
+                .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Color(uiColor: .secondarySystemGroupedBackground))
+            .accessibilityIdentifier("tabletop-daily-sticky-actions")
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("daily-tabletop-editor")
+    }
     var body: some View {
         GeometryReader { proxy in
             let fold = duoDivisionFrame(in: proxy)
@@ -358,9 +518,9 @@ struct NativeDailyScreen: View {
                       fold.minY >= 145, proxy.size.height - fold.maxY >= 145 {
                 // Tabletop pose: touch controls live on the stable lower leaf.
                 VStack(spacing: 0) {
-                    dailyWorkPane.frame(height: max(0, fold.minY))
+                    tabletopDailyDashboard.frame(height: max(0, fold.minY))
                     Color.clear.frame(height: max(0, fold.height))
-                    dailyEditPane.frame(height: max(0, proxy.size.height - fold.maxY))
+                    tabletopDailyEditor.frame(height: max(0, proxy.size.height - fold.maxY))
                 }
                 .accessibilityIdentifier("daily-fold-tabletop")
             } else {
@@ -582,6 +742,60 @@ struct NativeClosingMonthCalendar: View {
     }
 }
 
+// Low-profile month grid for the upper leaf of the tabletop Duo pose.
+// Unlike the expanded month grid, every day fits into a touch-friendly
+// compact row; day-to-record routing is preserved.
+private struct NativeClosingTabletopCalendar: View {
+    @ObservedObject var model: NativeNavigationModel
+    let month: ClosingMonthData
+    private let weekdays = ["日","月","火","水","木","金","土"]
+    private var weekCount: Int {
+        (month.firstWeekday + month.days + 6) / 7
+    }
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                ForEach(0..<7, id: \.self) { weekday in
+                    Text(weekdays[weekday])
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(weekday == 0 ? Color.red : weekday == 6 ? Color.blue : Color.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            ForEach(0..<weekCount, id: \.self) { week in
+                HStack(spacing: 4) {
+                    ForEach(0..<7, id: \.self) { column in
+                        let day = week * 7 + column - month.firstWeekday + 1
+                        if (1...month.days).contains(day) {
+                            let key = month.key(day)
+                            let record = model.calendarRows[key]
+                            Button { model.openCalendarDate(key) } label: {
+                                VStack(spacing: 2) {
+                                    Text("\(day)")
+                                        .font(.caption.weight(.semibold))
+                                        .monospacedDigit()
+                                        .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
+                                    Circle()
+                                        .fill(record?.work == true ? Color.green :
+                                              record?.leave == true ? Color.purple : Color.clear)
+                                        .frame(width: 4, height: 4)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 29)
+                                .background(closingColor(record), in: RoundedRectangle(cornerRadius: 7))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(day)日 \(closingStatus(record))")
+                        } else {
+                            Color.clear.frame(maxWidth: .infinity, minHeight: 29)
+                        }
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier("closing-tabletop-mini-calendar")
+    }
+}
+
 struct NativeClosingScreen: View {
     @ObservedObject var model: NativeNavigationModel
     private func mins(_ m:Int) -> String { "\(m / 60)時間\(String(format:"%02d",m % 60))分" }
@@ -674,6 +888,60 @@ struct NativeClosingScreen: View {
         }
         .accessibilityIdentifier("closing-fold-calendar-pane")
     }
+    private func tabletopClosingDashboard(month: ClosingMonthData, width: CGFloat) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("締め申請")
+                        .font(.headline)
+                    Text(month.title)
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Label("月間", systemImage: "calendar")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                closingSummary(columns: width >= 600 ? 4 : 2)
+                NativeClosingTabletopCalendar(model: model, month: month)
+                    .padding(12)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 16))
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .frame(maxWidth: 750).frame(maxWidth: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("closing-tabletop-dashboard")
+    }
+    private func tabletopClosingRecords(month: ClosingMonthData) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("日別の勤務記録", systemImage: "list.bullet.rectangle")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("タップして確認")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            Divider()
+            ScrollView {
+                NativeClosingList(model:model,month:month)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .frame(maxWidth: 640).frame(maxWidth: .infinity)
+            }
+            Divider()
+            Button { model.showOfficial = true } label: {
+                Label("締め申請・履歴を確認", systemImage: "checkmark.seal")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Color(uiColor: .secondarySystemGroupedBackground))
+            .accessibilityIdentifier("tabletop-closing-sticky-action")
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("closing-tabletop-records")
+    }
     var body: some View {
         GeometryReader { proxy in
             let expanded = proxy.size.width >= 690
@@ -695,10 +963,10 @@ struct NativeClosingScreen: View {
                       fold.minY >= 145, proxy.size.height - fold.maxY >= 145 {
                 let month = ClosingMonthData(model.calendarMonth)
                 VStack(spacing: 0) {
-                    closingCalendarPane(month: month)
+                    tabletopClosingDashboard(month: month, width: proxy.size.width)
                         .frame(height: max(0, fold.minY))
                     Color.clear.frame(height: max(0, fold.height))
-                    closingOverviewPane(month: month)
+                    tabletopClosingRecords(month: month)
                         .frame(height: max(0, proxy.size.height - fold.maxY))
                 }
                 .accessibilityIdentifier("closing-fold-tabletop")
