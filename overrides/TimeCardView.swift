@@ -660,6 +660,7 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
         private var recoveryAutoAttempted = false
         private var recoveryAwaitingLogin = false
         private var recoveryAutoSubmitting = false
+        private var recoveryManualRequested = false
         private var recoveryGeneration = 0
         // An automatic, sequential official-page visit ONCE per app launch.
         // Never open a second WKWebView or issue parallel session requests.
@@ -754,6 +755,7 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
         private func showRecovery(message: String) {
             if !navigation.recoveryActive {
                 navigation.recoveryActive = true
+                recoveryManualRequested = false
                 navigation.recoveryMessage = message
                 navigation.recoveryAutomatic = false
                 navigation.recoveryLoading = false
@@ -832,6 +834,7 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
             // The manual path does not read saved credentials without the
             // user's action and never silently retries the rejected action.
             automaticSignInAttempted = true
+            recoveryManualRequested = true
             recoveryGeneration += 1
             recoveryAwaitingLogin = false
             recoveryAutoSubmitting = false
@@ -879,6 +882,7 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                 return
             }
             recoveryAwaitingLogin = false
+            recoveryManualRequested = false
             recoveryAutoSubmitting = true
             navigation.recoveryMessage = "保存済みアカウントでログインしています…"
             guard let json = jsonLiteral([
@@ -1188,6 +1192,7 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                 self.sendSalaryStatus()
                 if state["home"] == true {
                     if self.navigation.recoveryActive {
+                        self.recoveryManualRequested = false
                         self.recoveryAutoSubmitting = false
                         self.recoveryAwaitingLogin = false
                         self.recoveryGeneration += 1
@@ -1213,6 +1218,14 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                     }
                     self.beginAutomaticDashboardRefresh()
                 } else if state["login"] == true {
+                    if self.navigation.recoveryActive && self.recoveryManualRequested {
+                        self.recoveryManualRequested = false
+                        self.recoveryGeneration += 1
+                        self.navigation.recoveryActive = false
+                        self.navigation.recoveryLoading = false
+                        self.navigation.recoveryAutomatic = false
+                        self.navigation.recoveryMessage = ""
+                    }
                     if self.navigation.recoveryActive && self.recoveryAutoSubmitting {
                         self.recoveryAutoSubmitting = false
                         self.navigation.recoveryLoading = false
