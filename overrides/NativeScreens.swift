@@ -742,6 +742,60 @@ struct NativeClosingMonthCalendar: View {
     }
 }
 
+// Low-profile month grid for the upper leaf of the tabletop Duo pose.
+// Unlike the expanded month grid, every day fits into a touch-friendly
+// compact row; day-to-record routing is preserved.
+private struct NativeClosingTabletopCalendar: View {
+    @ObservedObject var model: NativeNavigationModel
+    let month: ClosingMonthData
+    private let weekdays = ["日","月","火","水","木","金","土"]
+    private var weekCount: Int {
+        (month.firstWeekday + month.days + 6) / 7
+    }
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                ForEach(0..<7, id: \.self) { weekday in
+                    Text(weekdays[weekday])
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(weekday == 0 ? Color.red : weekday == 6 ? Color.blue : Color.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            ForEach(0..<weekCount, id: \.self) { week in
+                HStack(spacing: 4) {
+                    ForEach(0..<7, id: \.self) { column in
+                        let day = week * 7 + column - month.firstWeekday + 1
+                        if (1...month.days).contains(day) {
+                            let key = month.key(day)
+                            let record = model.calendarRows[key]
+                            Button { model.openCalendarDate(key) } label: {
+                                VStack(spacing: 2) {
+                                    Text("\(day)")
+                                        .font(.caption.weight(.semibold))
+                                        .monospacedDigit()
+                                        .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
+                                    Circle()
+                                        .fill(record?.work == true ? Color.green :
+                                              record?.leave == true ? Color.purple : Color.clear)
+                                        .frame(width: 4, height: 4)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 29)
+                                .background(closingColor(record), in: RoundedRectangle(cornerRadius: 7))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(day)日 \(closingStatus(record))")
+                        } else {
+                            Color.clear.frame(maxWidth: .infinity, minHeight: 29)
+                        }
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier("closing-tabletop-mini-calendar")
+    }
+}
+
 struct NativeClosingScreen: View {
     @ObservedObject var model: NativeNavigationModel
     private func mins(_ m:Int) -> String { "\(m / 60)時間\(String(format:"%02d",m % 60))分" }
@@ -834,6 +888,60 @@ struct NativeClosingScreen: View {
         }
         .accessibilityIdentifier("closing-fold-calendar-pane")
     }
+    private func tabletopClosingDashboard(month: ClosingMonthData, width: CGFloat) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("締め申請")
+                        .font(.headline)
+                    Text(month.title)
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Label("月間", systemImage: "calendar")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                closingSummary(columns: width >= 600 ? 4 : 2)
+                NativeClosingTabletopCalendar(model: model, month: month)
+                    .padding(12)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 16))
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .frame(maxWidth: 750).frame(maxWidth: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("closing-tabletop-dashboard")
+    }
+    private func tabletopClosingRecords(month: ClosingMonthData) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("日別の勤務記録", systemImage: "list.bullet.rectangle")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("タップして確認")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            Divider()
+            ScrollView {
+                NativeClosingList(model:model,month:month)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .frame(maxWidth: 640).frame(maxWidth: .infinity)
+            }
+            Divider()
+            Button { model.showOfficial = true } label: {
+                Label("締め申請・履歴を確認", systemImage: "checkmark.seal")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Color(uiColor: .secondarySystemGroupedBackground))
+            .accessibilityIdentifier("tabletop-closing-sticky-action")
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("closing-tabletop-records")
+    }
     var body: some View {
         GeometryReader { proxy in
             let expanded = proxy.size.width >= 690
@@ -855,10 +963,10 @@ struct NativeClosingScreen: View {
                       fold.minY >= 145, proxy.size.height - fold.maxY >= 145 {
                 let month = ClosingMonthData(model.calendarMonth)
                 VStack(spacing: 0) {
-                    closingCalendarPane(month: month)
+                    tabletopClosingDashboard(month: month, width: proxy.size.width)
                         .frame(height: max(0, fold.minY))
                     Color.clear.frame(height: max(0, fold.height))
-                    closingOverviewPane(month: month)
+                    tabletopClosingRecords(month: month)
                         .frame(height: max(0, proxy.size.height - fold.maxY))
                 }
                 .accessibilityIdentifier("closing-fold-tabletop")
