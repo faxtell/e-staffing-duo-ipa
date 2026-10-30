@@ -173,9 +173,11 @@
   };
   const optionsSnapshot = (row, which) => {
     const result=optionsFor(row);
-    if(result.options.length) return result;
-    const value=labeledValue(which==='category'?['区分']:['就業場所']);
-    return {kind:'display',options:[],value};
+    const displayed=labeledValue(which==='category'?['区分']:['就業場所']);
+    const selected=result.options.filter(option=>option.selected).map(option=>option.label).join('・');
+    // Some approved forms keep their disabled select/radio in the DOM.
+    // Preserve their selected text alongside the display-only cell fallback.
+    return {...result,value:displayed || selected};
   };
   const values = () => Object.fromEntries(fieldNames.map(name=>[name, displayValue(name)]));
   function sendSnapshot() {
