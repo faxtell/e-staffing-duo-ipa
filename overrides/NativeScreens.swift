@@ -108,12 +108,15 @@ struct NativeHomeScreen: View {
 struct NativeDailyScreen: View {
     @ObservedObject var model: NativeNavigationModel
     @State private var confirmedApply = false
-    // Read-only preview preferences; never change the official form automatically.
+    // The forecast and the official break field share a single source of truth.
     @AppStorage("etc-duo-v33.shift.netMinutes") private var shiftNetMinutes = 450
     @AppStorage("etc-duo-v33.shift.breakMinutes") private var plannedBreakMinutes = 60
-    @State private var previewRestOverride: Int? = nil
     private var previewRestMinutes: Int {
-        previewRestOverride ?? enteredRestMinutes ?? plannedBreakMinutes
+        enteredRestMinutes ?? plannedBreakMinutes
+    }
+    private func updateBreakMinutes(_ value: Int) {
+        guard (0...960).contains(value) else { return }
+        model.nativeFormAction(["kind":"field","name":"rstTime","value":"\(value)"])
     }
     private var expectedEndTime: String? {
         ShiftEndForecast.endTime(startHHmm: field("startTime"),
@@ -204,47 +207,51 @@ struct NativeDailyScreen: View {
                         }
                         Spacer(minLength:0)
                         Menu {
-                            ForEach([45,60,90], id: \.self) { rest in
+                            ForEach([0,30,45,60,90,120], id: \.self) { rest in
                                 Button {
-                                    previewRestOverride = rest
+                                    updateBreakMinutes(rest)
                                 } label: {
-                                    Label("休憩\(rest)分", systemImage:previewRestMinutes == rest ? "checkmark" : "clock")
+                                    Label("休憩\(rest)分", systemImage: previewRestMinutes == rest ? "checkmark.circle.fill" : "clock")
                                 }
                             }
-                            if previewRestOverride != nil {
-                                Button("実際の休憩を使う") { previewRestOverride = nil }
-                            }
                         } label: {
-                            Label("休憩を比較",systemImage:"chevron.up.chevron.down")
+                            Label("休憩 \(previewRestMinutes)分",systemImage:"chevron.up.chevron.down")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .accessibilityIdentifier("daily-preview-break-menu")
                     }
                     .accessibilityIdentifier("daily-shift-preview-inline")
-                }
-                NativeSurface(title:"勤務区分・就業場所") {
-                    Text("区分").font(.subheadline.weight(.semibold))
-                    choices(model.nativeCategory,group:"category")
                     Divider()
-                    Text("就業場所").font(.subheadline.weight(.semibold))
-                    choices(model.nativeWorkplace,group:"workplace")
-                }
-                NativeSurface(title:"休憩・備考") {
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("休憩の目安").font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Label("実際の休憩",systemImage:"cup.and.saucer")
+                            .font(.subheadline.weight(.medium))
+                        Spacer(minLength:0)
+                        TextField("分",text:Binding(
+                            get: { field("rstTime") },
+                            set: { model.nativeFormAction(["kind":"field","name":"rstTime","value":$0]) }
+                        ))
+                            .keyboardType(.numbersAndPunctuation)
+                            .textInputAutocapitalization(.never)
+                            .multilineTextAlignment(.trailing)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 82)
+                            .accessibilityIdentifier("daily-break-minutes-input")
+                        Text("分").font(.caption).foregroundStyle(.secondary)
+                    }
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("休憩の目安").font(.caption2).foregroundStyle(.secondary)
                             Text(recommendedRestMinutes.map { "\($0)分" } ?? "—")
-                                .font(.title3.bold())
+                                .font(.subheadline.weight(.semibold))
                         }
                         Spacer()
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text("実労働時間").font(.caption).foregroundStyle(.secondary)
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Text("実労働時間").font(.caption2).foregroundStyle(.secondary)
                             Text(actualWorkMinutes.map(duration) ?? "—")
-                                .font(.title3.bold())
+                                .font(.subheadline.weight(.semibold))
                         }
                     }
-                    fieldEntry("実際の休憩時間（分）",name:"rstTime")
                     if let required = legalMinimumMinutes, let entered = enteredRestMinutes,
                        required > entered {
                         Label("実労働時間に対する最低休憩は\(required)分です。取得した休憩を確認してください。",
@@ -264,6 +271,14 @@ struct NativeDailyScreen: View {
                     if model.nativeDailyFields["nightRstTime"] != nil && !field("nightRstTime").isEmpty {
                         fieldEntry("深夜休憩",name:"nightRstTime")
                     }
+                }
+                NativeSurface(title:"勤務区分・就業場所") {
+                    Text("区分").font(.subheadline.weight(.semibold))
+                    choices(model.nativeCategory,group:"category")
+                    Divider()
+                    Text("就業場所").font(.subheadline.weight(.semibold))
+                    choices(model.nativeWorkplace,group:"workplace")
+                    Divider()
                     fieldEntry("備考",name:"remark")
                 }
                 HStack(spacing:10) {
@@ -284,7 +299,6 @@ struct NativeDailyScreen: View {
                 .buttonStyle(.borderedProminent).controlSize(.large)
             }.padding(16).frame(maxWidth:750).frame(maxWidth:.infinity)
         }
-        .onChange(of: model.nativeDayTitle) { _, _ in previewRestOverride = nil }
     }
     private func timeItem(_ label:String,name:String)->some View {
         VStack(alignment:.leading,spacing:8) {
@@ -497,12 +511,18 @@ struct NativeClosingScreen: View {
     private var leaveCount: Int {
         model.calendarRows.values.filter { $0.known && $0.leave }.count
     }
-    private var closingOverview: String {
-        let worked=(model.summary["worked"] as? Int).map { "出勤\($0)日" } ?? "出勤—"
-        let leave="年休\(leaveCount)日"
-        let total=(model.summary["minutes"] as? Int).map { "実労働\(mins($0))" } ?? "実労働—"
-        let overtime=(model.summary["overtimeMinutes"] as? Int).map { "残業\(mins($0))" } ?? "残業—"
-        return [worked,leave,total,overtime].joined(separator:"  ·  ")
+    private func summaryTile(_ title: String, value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: icon)
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(value)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 13))
     }
     var body: some View {
         GeometryReader { proxy in
@@ -524,10 +544,21 @@ struct NativeClosingScreen: View {
                     }
                     if model.calendarMonth.count == 7 {
                         let month=ClosingMonthData(model.calendarMonth)
-                        Text(closingOverview)
-                            .font(.subheadline).foregroundStyle(.secondary)
-                            .fixedSize(horizontal:false,vertical:true)
-                            .accessibilityIdentifier("closing-monthly-overview")
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                                                         count: expanded ? 4 : 2), spacing: 8) {
+                            summaryTile("出勤", value: (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—",
+                                        icon: "calendar.badge.checkmark")
+                                .accessibilityIdentifier("closing-summary-worked")
+                            summaryTile("年休", value: "\(leaveCount)日", icon: "sun.max")
+                                .accessibilityIdentifier("closing-summary-leave")
+                            summaryTile("実労働", value: (model.summary["minutes"] as? Int).map(mins) ?? "—",
+                                        icon: "clock")
+                                .accessibilityIdentifier("closing-summary-work-minutes")
+                            summaryTile("残業", value: (model.summary["overtimeMinutes"] as? Int).map(mins) ?? "—",
+                                        icon: "moon.stars")
+                                .accessibilityIdentifier("closing-summary-overtime")
+                        }
+                        .accessibilityIdentifier("closing-monthly-overview")
                         if expanded {
                             NativeSurface(title:"月間カレンダー") {
                                 NativeClosingMonthCalendar(model:model,month:month)
