@@ -23,6 +23,71 @@ struct NativeApplicationScreen: View {
     }
 }
 
+// Native recovery replaces the raw server error, while the original
+// trusted WKWebView remains mounted behind it with the same cookie store.
+struct NativeSessionRecoveryScreen: View {
+    @ObservedObject var model: NativeNavigationModel
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .font(.system(size: 44, weight: .medium))
+                            .foregroundStyle(.orange)
+                            .frame(width: 76, height: 76)
+                            .background(Color.orange.opacity(0.12),
+                                        in: RoundedRectangle(cornerRadius: 23))
+                        Text("再ログインが必要です")
+                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                        Text("e-staffingで許可されていない操作が検出されました。セッションを安全に接続し直します。")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    NativeSurface(title: "接続状態") {
+                        HStack(alignment: .center, spacing: 12) {
+                            if model.recoveryLoading {
+                                ProgressView().controlSize(.regular)
+                                    .accessibilityLabel("再ログイン処理中")
+                            } else {
+                                Image(systemName: "info.circle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                            Text(model.recoveryMessage.isEmpty
+                                 ? "再ログインしてください。"
+                                 : model.recoveryMessage)
+                                .font(.subheadline)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if model.recoveryAutomatic && model.recoveryLoading {
+                            Label("Face IDを使わず、保存済みのアカウントを使用しています",
+                                  systemImage: "key.fill")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Button { model.openRecoveryLogin() } label: {
+                        Label("公式ログイン画面へ", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(model.recoveryLoading)
+                    .accessibilityIdentifier("session-recovery-open-login")
+                    Text("前の画面で拒否された入力・保存・申請操作は自動で再送信しません。申請直後の場合は、ログイン後に申請履歴をご確認ください。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(22)
+                .frame(maxWidth: 510)
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .center)
+            }
+            .background(Color(uiColor: .systemGroupedBackground))
+        }
+        .accessibilityIdentifier("native-session-recovery")
+    }
+}
+
 // Keep the iOS 27.1-only fold API behind an availability check; the app's
 // deployment target also supports earlier iOS versions.
 private func duoDivisionFrame(in proxy: GeometryProxy) -> CGRect? {
@@ -1240,6 +1305,7 @@ struct NativePreferencesScreen: View {
     @AppStorage("etc-duo-reminder-close.hour") private var closeHour = 17
     @AppStorage("etc-duo-reminder-close.minute") private var closeMinute = 0
     @AppStorage("etc-duo-reminder-close.day") private var closeDay = 15
+    @AppStorage("etc-duo-recovery.autoSignIn") private var autoRecovery = true
     @State private var confirmDelete = false
     @State private var credentialsSaved = CredentialVault.exists()
     @State private var deletedMessage = ""
@@ -1332,6 +1398,15 @@ struct NativePreferencesScreen: View {
             Section("iPhone Duo") {
                 Toggle("日々勤怠にカレンダーを並べる", isOn: $model.sidebarEnabled)
             }
+            Section {
+                Toggle("エラー時にFace IDなしで再ログイン", isOn: $autoRecovery)
+                    .disabled(!credentialsSaved)
+                if !credentialsSaved {
+                    Text("自動再ログインにはログイン情報の保存が必要です。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } header: { Text("セッションの復旧") }
+              footer: { Text("許可されていない操作の画面が表示されたときのみ、保存済みのKeychain情報を使って公式ログインを1回試みます。iPhoneのロック解除が必要です。直前の申請や保存操作は再送信しません。") }
             Section {
                 LabeledContent("ログイン情報", value: credentialsSaved ? "このiPhoneに保存済み" : "未保存")
                 if credentialsSaved {
