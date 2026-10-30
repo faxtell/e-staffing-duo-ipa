@@ -102,6 +102,9 @@ jobs:
       - name: Test iPhone Duo half-fold layouts and version
         shell: bash
         run: cd source && node tests/native-duo-fold-v35.test.cjs
+      - name: Test tabletop layout polish (v3.6)
+        shell: bash
+        run: cd source && node tests/tabletop-polish-v36.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
