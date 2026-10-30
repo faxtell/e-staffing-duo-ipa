@@ -99,6 +99,9 @@ jobs:
       - name: Test simplified native workflows
         shell: bash
         run: cd source && if test -f tests/native-compact-v35.test.cjs; then node tests/native-compact-v35.test.cjs; else node tests/native-compact-v34.test.cjs; fi
+      - name: Test iPhone Duo half-fold layouts and version
+        shell: bash
+        run: cd source && node tests/native-duo-fold-v35.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
