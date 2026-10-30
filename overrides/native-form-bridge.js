@@ -1,6 +1,6 @@
-/* v3.0: read-only DOM snapshots + strictly allow-listed actions against ONE official WKWebView.
-   Never exports form tokens/cookies. Only the official temporary-save button may be auto-activated.
-   Never activates apply/cloApply or submits an application automatically. */
+/* v3.7: native submission is available only after explicit user confirmation.
+   This bridge clicks the official page's own named control in the ONE session WKWebView.
+   It never fabricates requests or exports cookies, tokens, form contents or URLs. */
 (() => {
   'use strict';
   if (location.origin !== 'https://m.e-staffing.ne.jp' || !location.pathname.startsWith('/s/')) return;
@@ -26,9 +26,62 @@
     };
     return;
   }
-  const form = document.querySelector('form[name="TMSINP01ActionForm"]');
-  if (!form) return;
   const post = payload => { try { window.webkit?.messageHandlers?.etcNativeFormBridge?.postMessage(payload); } catch(_){} };
+  const form = document.querySelector('form[name="TMSINP01ActionForm"]');
+  const closingForm = document.querySelector('form[name="TMSINP02ActionForm"]');
+  const submissionForm = form || closingForm;
+  if (!submissionForm) return;
+  const submissionKind = form ? 'daily' : 'close';
+  const submissionName = form ? 'apply' : 'cloApply';
+  const plainText = element => String(element?.textContent || '').trim().replace(/\\s+/g,' ').slice(0,120);
+  const submissionPeriod = () =>
+    plainText(submissionForm.querySelector('.etc-today-status,.etc-period,.divCenter')) ||
+    (submissionKind === 'daily' ? '表示中の日付' : '表示中の締め期間');
+  const officialSubmit = () => {
+    const el = submissionForm.querySelector('input[name="' + submissionName + '"],button[name="' + submissionName + '"]');
+    if (!el || el.disabled || el.closest('form') !== submissionForm) return null;
+    if (!(el instanceof HTMLInputElement || el instanceof HTMLButtonElement)) return null;
+    if (!['submit','button','image'].includes(el.type)) return null;
+    return el;
+  };
+  let submissionLocked = false;
+  const nativeSubmissionReady = () => {
+    const button = officialSubmit();
+    return !!button && !submissionLocked && !document.querySelector('[data-etc-native-submit-busy="true"]');
+  };
+  const submissionSnapshot = () => post({
+    action: 'submissionSnapshot', kind: submissionKind,
+    period: submissionPeriod(), available: nativeSubmissionReady()
+  });
+  window.__etcNativeSubmission = payload => {
+    if (!payload || payload.kind !== 'submit' || payload.form !== submissionKind ||
+        payload.confirmed !== true || typeof payload.period !== 'string' ||
+        payload.period !== submissionPeriod() || !nativeSubmissionReady()) return false;
+    // Changes pending in daily autosave must be committed/verified first.
+    if (form && (busy || timer || failed || lastState === 'sending' ||
+                  lastState === 'pending' || lastState === 'verify' ||
+                  lastState === 'local')) return false;
+    const button = officialSubmit();
+    if (!button) return false;
+    submissionLocked = true;
+    submissionForm.dataset.etcNativeSubmitBusy = 'true';
+    post({action: 'submissionState', kind: submissionKind, status: 'initiated',
+          message: '公式フォームの申請操作を開始しました。結果は確認中です。'});
+    try {
+      button.click(); // Official validation, confirmation and server session own the request.
+      submissionSnapshot();
+      return true;
+    } catch (_) {
+      submissionLocked = false;
+      delete submissionForm.dataset.etcNativeSubmitBusy;
+      post({action:'submissionState',kind:submissionKind,status:'error',
+            message:'公式画面で申請操作を開始できませんでした。'});
+      submissionSnapshot();
+      return false;
+    }
+  };
+  submissionSnapshot();
+  if (!form) return;
   const fieldNames = ['startTime','endTime','rstTime','nightRstTime','remark'];
   let busy = false, timer = null, revision = 0, failed = false, lastState = '';
   const text = e => String(e?.textContent || e?.value || '').trim().replace(/\s+/g,' ').slice(0,90);
@@ -103,7 +156,7 @@
     if(input instanceof HTMLInputElement && nativeSetter)nativeSetter.call(input,value);else input.value=value;
     input.dispatchEvent(new Event('input',{bubbles:true}));
     input.dispatchEvent(new Event('change',{bubbles:true}));
-    schedule();sendSnapshot();return true;
+    schedule();sendSnapshot();submissionSnapshot();return true;
   }
   function selectOption(which,index){
     if(!['category','workplace'].includes(which)||!Number.isInteger(index)||index<0||index>30)return false;
@@ -123,11 +176,11 @@
       }else input.checked=true;
       input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));
     }
-    schedule();sendSnapshot();return true;
+    schedule();sendSnapshot();submissionSnapshot();return true;
   }
   window.__etcNativeFormAction = payload => {
     if(!payload || typeof payload!=='object')return false;
-    if(payload.kind==='field')return setValue(payload.name,payload.value);
+    if(payload.kind==='field') { const updated=setValue(payload.name,payload.value); if(updated) submissionSnapshot(); return updated; }
     if(payload.kind==='choice')return selectOption(payload.group,payload.index);
     if(payload.kind==='breakRecalculate') {
       const button=form.querySelector('.etc-break-assistant-button');
@@ -148,6 +201,8 @@
   };
   form.addEventListener('input',capture,true);
   form.addEventListener('change',capture,true);
+  form.addEventListener('input',submissionSnapshot,true);
+  form.addEventListener('change',submissionSnapshot,true);
   // Hide redundant buttons in the web fallback too; leave named official fields untouched.
   for(const button of form.querySelectorAll('input[type=button],button[type=button]')){
     if(/^(定時|定時外)$/.test(text(button))) button.style.display='none';
