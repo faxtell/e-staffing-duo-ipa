@@ -7,8 +7,10 @@ const pbx = fs.readFileSync(path.join(root, 'EStaffingTimeCard.xcodeproj/project
 const daily = screens.split('struct NativeDailyScreen: View')[1].split('struct ClosingMonthData')[0];
 const closing = screens.split('struct NativeClosingScreen: View')[1].split('struct NativePreferencesScreen: View')[0];
 const settings = screens.split('struct NativePreferencesScreen: View')[1].split('struct NativeLoginScreen: View')[0];
+assert(screens.includes('if #available(iOS 27.1, *)'), 'Fold API requires availability guard');
+assert(screens.includes('proxy.reservedRegions(kind: .division)'), 'Must use the active division region');
 for(const content of [daily, closing]) {
-    assert(content.includes('proxy.reservedRegions(kind: .division)'), 'Must use active fold reservation, not assumed screen width');
+    assert(content.includes('let fold = duoDivisionFrame(in: proxy)'), 'Must use an availability-safe fold query');
     assert(content.includes('fold.height > fold.width'), 'Book fold must support horizontal arrangement');
     assert(content.includes('fold.width >= fold.height'), 'Tabletop fold must support vertical arrangement');
     assert(content.includes('Color.clear.frame(width: max(0, fold.width))'), 'Book view must leave hinge clear');
