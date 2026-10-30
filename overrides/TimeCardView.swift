@@ -270,7 +270,7 @@ final class NativeNavigationModel: ObservableObject {
         } else if action == "submissionState",
                   let status = payload["status"] as? String,
                   let message = payload["message"] as? String,
-                  message.count <= 200, ["initiated", "error", "verify"].contains(status) {
+                  message.count <= 200, ["initiated", "error", "verify", "cancelled"].contains(status) {
             nativeSubmissionState = status
             nativeSubmissionMessage = message
             if status == "initiated" {
@@ -805,6 +805,7 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                                           preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel) { _ in
                 completionHandler(false)
+                webView.evaluateJavaScript("window.__etcNativeSubmissionCancel?.()", completionHandler: nil)
             })
             alert.addAction(UIAlertAction(title: "確認", style: .default) { _ in
                 completionHandler(true)
