@@ -32,6 +32,8 @@ jobs:
           if test -d overrides/tests; then
             cp overrides/tests/*.cjs source/tests/
           fi
+          python3 overrides/apply_version.py
+          echo "APP_VERSION=$(cat overrides/VERSION)" >> "$GITHUB_ENV"
       - name: Select Xcode 27.1
         shell: bash
         run: |
@@ -103,7 +105,7 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EStaffingTimeCard-Duo-v3.4-iOS27.1-unsigned
+          name: EStaffingTimeCard-Duo-v${{ env.APP_VERSION }}-iOS27.1-unsigned
           path: source/BuildOutput/EStaffingTimeCard-Duo-iOS27.1-unsigned.ipa
           retention-days: 7
           if-no-files-found: error
@@ -113,14 +115,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p Downloads
-          cp source/BuildOutput/EStaffingTimeCard-Duo-iOS27.1-unsigned.ipa Downloads/EStaffingDuo_v3_4_break_edit.ipa
+          cp source/BuildOutput/EStaffingTimeCard-Duo-iOS27.1-unsigned.ipa "Downloads/EStaffingDuo_v${APP_VERSION//./_}.ipa"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Downloads/EStaffingDuo_v3_4_break_edit.ipa
+          git add "Downloads/EStaffingDuo_v${APP_VERSION//./_}.ipa"
           if git diff --cached --quiet; then
             echo "IPA already up to date"
           else
-            git commit -m "Publish break-edit compact-card unsigned IPA"
+            git commit -m "Publish Duo unsigned IPA v${APP_VERSION}"
             git push origin HEAD:main
           fi
       - name: Upload build logs on failure
