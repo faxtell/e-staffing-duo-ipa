@@ -5,7 +5,7 @@ on:
     paths: ['project.zip', '.github/workflows/build-ipa.yml', 'overrides/**']
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     name: Build unsigned IPA with iOS 27.1 SDK
@@ -107,6 +107,22 @@ jobs:
           path: source/BuildOutput/EStaffingTimeCard-Duo-iOS27.1-unsigned.ipa
           retention-days: 7
           if-no-files-found: error
+      - name: Publish IPA for direct download
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Downloads
+          cp source/BuildOutput/EStaffingTimeCard-Duo-iOS27.1-unsigned.ipa Downloads/EStaffingDuo_v3_4_break_edit.ipa
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Downloads/EStaffingDuo_v3_4_break_edit.ipa
+          if git diff --cached --quiet; then
+            echo "IPA already up to date"
+          else
+            git commit -m "Publish break-edit compact-card unsigned IPA"
+            git push origin HEAD:main
+          fi
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
