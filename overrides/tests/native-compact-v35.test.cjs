@@ -23,7 +23,7 @@ assert(!daily.includes('nativeFormAction(["kind":"field","name":"endTime"'),
 for (const token of [
   'closing-monthly-overview', 'closing-summary-worked', 'closing-summary-leave',
   'closing-summary-work-minutes', 'closing-summary-overtime',
-  'count: expanded ? 4 : 2', 'NativeClosingMonthCalendar', 'NativeClosingList'
+  'closingSummary(columns: expanded ? 4 : 2)', 'NativeClosingMonthCalendar', 'NativeClosingList'
 ]) assert(closing.includes(token), 'Closing card layout missing: ' + token);
 for (const token of [
   'nativeDestination("home"', 'nativeDestination("daily"',

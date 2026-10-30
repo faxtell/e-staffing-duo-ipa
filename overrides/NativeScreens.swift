@@ -23,6 +23,15 @@ struct NativeApplicationScreen: View {
     }
 }
 
+// Keep the iOS 27.1-only fold API behind an availability check; the app's
+// deployment target also supports earlier iOS versions.
+private func duoDivisionFrame(in proxy: GeometryProxy) -> CGRect? {
+    if #available(iOS 27.1, *) {
+        return proxy.reservedRegions(kind: .division).first?.frame
+    }
+    return nil
+}
+
 private struct NativeSurface<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -183,12 +192,20 @@ struct NativeDailyScreen: View {
     private func duration(_ total: Int) -> String {
         total % 60 == 0 ? "\(total / 60)時間" : "\(total / 60)時間\(total % 60)分"
     }
-    var body:some View {
-        ScrollView {
-            VStack(alignment:.leading,spacing:15) {
-                Text("日々勤怠").font(.largeTitle.bold())
-                if !model.nativeDayTitle.isEmpty {Text(model.nativeDayTitle).font(.subheadline).foregroundStyle(.secondary)}
-                NativeSurface(title:"勤務時間") {
+    // iOS 27.1 reports an active reserved division when Duo is partly folded.
+    // Divide the *actual* available view rectangle; do not infer a fold from
+    // orientation, window size or device identifiers.
+    private var dailyHeading: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("日々勤怠").font(.largeTitle.bold())
+            if !model.nativeDayTitle.isEmpty {
+                Text(model.nativeDayTitle)
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private var dailyWorkCard: some View {
+        NativeSurface(title:"勤務時間") {
                     HStack(spacing:12) {
                         timeItem("開始",name:"startTime")
                         timeItem("終了",name:"endTime")
@@ -272,7 +289,9 @@ struct NativeDailyScreen: View {
                         fieldEntry("深夜休憩",name:"nightRstTime")
                     }
                 }
-                NativeSurface(title:"勤務区分・就業場所") {
+    }
+    private var dailyDetailsCard: some View {
+        NativeSurface(title:"勤務区分・就業場所") {
                     Text("区分").font(.subheadline.weight(.semibold))
                     choices(model.nativeCategory,group:"category")
                     Divider()
@@ -281,7 +300,10 @@ struct NativeDailyScreen: View {
                     Divider()
                     fieldEntry("備考",name:"remark")
                 }
-                HStack(spacing:10) {
+    }
+    private var dailyActions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing:10) {
                     Label(saveText,systemImage:model.nativeSaveState == "error" ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath")
                         .font(.caption2).foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -297,7 +319,62 @@ struct NativeDailyScreen: View {
                         .frame(maxWidth:.infinity)
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
-            }.padding(16).frame(maxWidth:750).frame(maxWidth:.infinity)
+        }
+    }
+    private var dailyWorkPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 15) {
+                dailyHeading
+                dailyWorkCard
+            }
+            .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+        }
+        .accessibilityIdentifier("daily-fold-work-pane")
+    }
+    private var dailyEditPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 15) {
+                dailyDetailsCard
+                dailyActions
+            }
+            .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+        }
+        .accessibilityIdentifier("daily-fold-edit-pane")
+    }
+    var body: some View {
+        GeometryReader { proxy in
+            let fold = duoDivisionFrame(in: proxy)
+            if let fold, fold.height > fold.width,
+               fold.minX >= 270, proxy.size.width - fold.maxX >= 270 {
+                // Book pose: start/end, forecast and break on the first leaf;
+                // workplace, remarks and save on the other leaf.
+                HStack(spacing: 0) {
+                    dailyWorkPane.frame(width: max(0, fold.minX))
+                    Color.clear.frame(width: max(0, fold.width))
+                    dailyEditPane.frame(width: max(0, proxy.size.width - fold.maxX))
+                }
+                .accessibilityIdentifier("daily-fold-book")
+            } else if let fold, fold.width >= fold.height,
+                      fold.minY >= 145, proxy.size.height - fold.maxY >= 145 {
+                // Tabletop pose: touch controls live on the stable lower leaf.
+                VStack(spacing: 0) {
+                    dailyWorkPane.frame(height: max(0, fold.minY))
+                    Color.clear.frame(height: max(0, fold.height))
+                    dailyEditPane.frame(height: max(0, proxy.size.height - fold.maxY))
+                }
+                .accessibilityIdentifier("daily-fold-tabletop")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 15) {
+                        dailyHeading
+                        dailyWorkCard
+                        dailyDetailsCard
+                        dailyActions
+                    }
+                    .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("daily-responsive-standard")
+            }
         }
     }
     private func timeItem(_ label:String,name:String)->some View {
@@ -524,28 +601,26 @@ struct NativeClosingScreen: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground),
                     in: RoundedRectangle(cornerRadius: 13))
     }
-    var body: some View {
-        GeometryReader { proxy in
-            let expanded = proxy.size.width >= 690
-            ScrollView {
-                VStack(alignment:.leading,spacing:15) {
-                    HStack {
-                        VStack(alignment:.leading,spacing:4) {
-                            Text("締め申請").font(.largeTitle.bold())
-                            if model.calendarMonth.count == 7 {
-                                Text(ClosingMonthData(model.calendarMonth).title)
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        Button { model.showOfficial=true } label: {
-                            Label("申請・履歴",systemImage:"checkmark.seal")
-                        }.buttonStyle(.borderedProminent)
-                    }
-                    if model.calendarMonth.count == 7 {
-                        let month=ClosingMonthData(model.calendarMonth)
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
-                                                         count: expanded ? 4 : 2), spacing: 8) {
+    private var closingHeading: some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("締め申請").font(.largeTitle.bold())
+                if model.calendarMonth.count == 7 {
+                    Text(ClosingMonthData(model.calendarMonth).title)
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 4)
+            Button { model.showOfficial = true } label: {
+                Label("申請・履歴", systemImage: "checkmark.seal")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+    }
+    private func closingSummary(columns: Int) -> some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                                                         count: columns), spacing: 8) {
                             summaryTile("出勤", value: (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—",
                                         icon: "calendar.badge.checkmark")
                                 .accessibilityIdentifier("closing-summary-worked")
@@ -559,29 +634,100 @@ struct NativeClosingScreen: View {
                                 .accessibilityIdentifier("closing-summary-overtime")
                         }
                         .accessibilityIdentifier("closing-monthly-overview")
-                        if expanded {
-                            NativeSurface(title:"月間カレンダー") {
-                                NativeClosingMonthCalendar(model:model,month:month)
+    }
+    private func closingCalendar(month: ClosingMonthData) -> some View {
+        NativeSurface(title: "月間カレンダー") {
+            NativeClosingMonthCalendar(model:model,month:month)
+        }
+    }
+    private func closingRecords(month: ClosingMonthData) -> some View {
+        NativeSurface(title: "勤務記録") {
+            NativeClosingList(model:model,month:month)
+        }
+    }
+    private var closingUnavailable: some View {
+        VStack(spacing: 12) {
+            ContentUnavailableView("勤務記録を読み込めませんでした",
+                systemImage: "calendar.badge.exclamationmark",
+                description: Text("締め申請画面の読み込み後に表示されます"))
+            Button("申請・履歴へ") { model.showOfficial = true }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+    private func closingOverviewPane(month: ClosingMonthData) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 15) {
+                closingHeading
+                closingSummary(columns: 2)
+                closingRecords(month: month)
+            }
+            .padding(16).frame(maxWidth: 640).frame(maxWidth: .infinity)
+        }
+        .accessibilityIdentifier("closing-fold-overview-pane")
+    }
+    private func closingCalendarPane(month: ClosingMonthData) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 15) {
+                closingCalendar(month: month)
+            }
+            .padding(16).frame(maxWidth: 640).frame(maxWidth: .infinity)
+        }
+        .accessibilityIdentifier("closing-fold-calendar-pane")
+    }
+    var body: some View {
+        GeometryReader { proxy in
+            let expanded = proxy.size.width >= 690
+            let fold = duoDivisionFrame(in: proxy)
+            if model.calendarMonth.count == 7, let fold,
+               fold.height > fold.width,
+               fold.minX >= 320, proxy.size.width - fold.maxX >= 320 {
+                let month = ClosingMonthData(model.calendarMonth)
+                HStack(spacing: 0) {
+                    closingOverviewPane(month: month)
+                        .frame(width: max(0, fold.minX))
+                    Color.clear.frame(width: max(0, fold.width))
+                    closingCalendarPane(month: month)
+                        .frame(width: max(0, proxy.size.width - fold.maxX))
+                }
+                .accessibilityIdentifier("closing-fold-book")
+            } else if model.calendarMonth.count == 7, let fold,
+                      fold.width >= fold.height,
+                      fold.minY >= 145, proxy.size.height - fold.maxY >= 145 {
+                let month = ClosingMonthData(model.calendarMonth)
+                VStack(spacing: 0) {
+                    closingCalendarPane(month: month)
+                        .frame(height: max(0, fold.minY))
+                    Color.clear.frame(height: max(0, fold.height))
+                    closingOverviewPane(month: month)
+                        .frame(height: max(0, proxy.size.height - fold.maxY))
+                }
+                .accessibilityIdentifier("closing-fold-tabletop")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 15) {
+                        closingHeading
+                        if model.calendarMonth.count == 7 {
+                            let month = ClosingMonthData(model.calendarMonth)
+                            closingSummary(columns: expanded ? 4 : 2)
+                            if expanded {
+                                closingCalendar(month: month)
+                            } else {
+                                closingRecords(month: month)
                             }
                         } else {
-                            NativeSurface(title:"勤務記録") {
-                                NativeClosingList(model:model,month:month)
-                            }
+                            closingUnavailable
                         }
-                    } else {
-                        ContentUnavailableView("勤務記録を読み込めませんでした",systemImage:"calendar.badge.exclamationmark",
-                            description:Text("締め申請画面の読み込み後に表示されます"))
-                        Button("申請・履歴へ") { model.showOfficial=true }
-                            .buttonStyle(.borderedProminent)
                     }
+                    .padding(16)
+                    .frame(maxWidth: expanded ? 1220 : 640)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(16)
-                .frame(maxWidth:expanded ? 1220 : 640)
-                .frame(maxWidth:.infinity)
+                .accessibilityIdentifier(expanded ? "closing-inner-mode" : "closing-outer-mode")
             }
-            .id("closing-month-\(model.calendarMonth)-\(expanded ? "calendar" : "list")")
-            .accessibilityIdentifier(expanded ? "closing-inner-mode" : "closing-outer-mode")
         }
+        // Fold/unfold must not discard the selected month or reset the screen.
+        .accessibilityIdentifier("closing-responsive")
+        .id("closing-month-\(model.calendarMonth)")
     }
 }
 
@@ -700,7 +846,7 @@ struct NativePreferencesScreen: View {
             } header: { Text("アカウントとプライバシー") }
               footer: { Text("保存したアカウント情報はiPhoneのKeychainで保護されます。") }
             Section {
-                LabeledContent("アプリバージョン", value: "3.4")
+                LabeledContent("アプリバージョン", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
                 Text("WebTimeCard · 勤怠管理").foregroundStyle(.secondary)
             } header: { Text("アプリ情報") }
         }
