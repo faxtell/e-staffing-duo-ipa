@@ -148,6 +148,13 @@ final class NativeNavigationModel: ObservableObject {
     @Published var nativeSaveState = "idle"
     @Published var nativeDayTitle = ""
     @Published var nativeCanSave = false
+    @Published var nativeCanDailyApply = false
+    @Published var nativeCanCloseApply = false
+    @Published var nativeDailyApplyPeriod = ""
+    @Published var nativeCloseApplyPeriod = ""
+    @Published var nativeSubmissionState = "idle"
+    @Published var nativeSubmissionMessage = ""
+    @Published var nativeSubmissionInFlight = false
     @Published var nativeSettingsOpen = false
     @Published var nativeLoginReady = false
     @Published var showOfficial = false
@@ -245,6 +252,71 @@ final class NativeNavigationModel: ObservableObject {
         webView.evaluateJavaScript("window.__etcNativeFormAction?.(\(literal))", completionHandler: nil)
     }
 
+    func receiveNativeSubmission(_ payload: [String: Any]) {
+        guard let action = payload["action"] as? String,
+              let kind = payload["kind"] as? String,
+              ["daily", "close"].contains(kind) else { return }
+        if action == "submissionSnapshot" {
+            guard let period = payload["period"] as? String,
+                  !period.isEmpty, period.count <= 120,
+                  let available = payload["available"] as? Bool else { return }
+            if kind == "daily" {
+                nativeDailyApplyPeriod = period
+                nativeCanDailyApply = available && !nativeSubmissionInFlight
+            } else {
+                nativeCloseApplyPeriod = period
+                nativeCanCloseApply = available && !nativeSubmissionInFlight
+            }
+        } else if action == "submissionState",
+                  let status = payload["status"] as? String,
+                  let message = payload["message"] as? String,
+                  message.count <= 200, ["initiated", "error", "verify"].contains(status) {
+            nativeSubmissionState = status
+            nativeSubmissionMessage = message
+            if status == "initiated" {
+                nativeSubmissionInFlight = true
+                nativeCanDailyApply = false
+                nativeCanCloseApply = false
+            } else {
+                nativeSubmissionInFlight = false
+            }
+        }
+    }
+
+    // The first tap shows a SwiftUI confirmation alert. Only its explicit
+    // "Apply" button calls this action; never reissue on retries/resizes.
+    func nativeSubmit(_ kind: String) {
+        guard ["daily", "close"].contains(kind),
+              !navigationInProgress, !dashboardLoading, !nativeSubmissionInFlight,
+              page == kind,
+              let webView = webView, let url = webView.url,
+              url.scheme == "https", url.host == "m.e-staffing.ne.jp",
+              url.path.hasPrefix("/s/"),
+              (kind == "daily" ? nativeCanDailyApply : nativeCanCloseApply) else { return }
+        let period = kind == "daily" ? nativeDailyApplyPeriod : nativeCloseApplyPeriod
+        guard !period.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: [
+                "kind": "submit", "form": kind,
+                "period": period, "confirmed": true
+              ]),
+              let literal = String(data: data, encoding: .utf8) else { return }
+        nativeSubmissionInFlight = true
+        nativeCanDailyApply = false
+        nativeCanCloseApply = false
+        nativeSubmissionState = "initiated"
+        nativeSubmissionMessage = "公式フォームへの申請操作を確認しています。完了はまだ確認できていません。"
+        webView.evaluateJavaScript("window.__etcNativeSubmission?.(\(literal))") { [weak self] result, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if error == nil, let success = result as? Bool, success { return }
+                // A page navigation can cancel the JS callback after an actual
+                // click. Do not unlock for another click or claim success.
+                self.nativeSubmissionState = "verify"
+                self.nativeSubmissionMessage = "操作結果を確認できません。申請履歴を確認してください。再送信はしないでください。"
+            }
+        }
+    }
+
     func receiveDaily(_ payload: [String: Any]) {
         guard let fields = payload["fields"] as? [String: String],
               let category = payload["category"] as? [String: Any],
@@ -295,7 +367,18 @@ final class NativeNavigationModel: ObservableObject {
     func receive(_ info: [String: Any]) {
         guard let state = info["page"] as? String,
               ["login", "home", "daily", "close", "settings", "other"].contains(state) else { return }
-        if page != state && state == "daily" { nativeDailyReady = false }
+        if page != state {
+            if state == "daily" { nativeDailyReady = false }
+            nativeCanDailyApply = false
+            nativeCanCloseApply = false
+            nativeDailyApplyPeriod = ""
+            nativeCloseApplyPeriod = ""
+            // A navigation is not proof of a successful application.
+            if nativeSubmissionInFlight {
+                nativeSubmissionState = "verify"
+                nativeSubmissionMessage = "公式画面の申請結果を確認してください。"
+            }
+        }
         page = state
         isVisible = info["visible"] as? Bool == true
         sheetOpen = info["sheetOpen"] as? Bool == true
@@ -723,12 +806,15 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                       let currentURL = webView?.url, isOfficialPage(currentURL),
                       let payload = message.body as? [String: Any],
                       let action = payload["action"] as? String,
-                      navigation.page == "daily" ||
-                        currentURL.path.contains("TMSINP01") else { return }
+                      navigation.page == "daily" || navigation.page == "close" ||
+                        currentURL.path.contains("TMSINP01") ||
+                        currentURL.path.contains("TMSINP02") else { return }
                 if action == "dailySnapshot" {
                     navigation.receiveDaily(payload)
                 } else if action == "saveState", let state = payload["status"] as? String {
                     navigation.nativeSaveState = state
+                } else if action == "submissionSnapshot" || action == "submissionState" {
+                    navigation.receiveNativeSubmission(payload)
                 }
                 return
             }
@@ -814,6 +900,13 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             self.navigation.navigationInProgress = false
+            if self.navigation.nativeSubmissionInFlight {
+                // Server navigation alone does not certify the new application.
+                self.navigation.nativeSubmissionState = "verify"
+                self.navigation.nativeSubmissionMessage =
+                    "申請後の公式ページへ移動しました。申請履歴で受付結果を確認してください。"
+                self.navigation.nativeSubmissionInFlight = false
+            }
             guard let url = webView.url, isOfficialPage(url) else { return }
             // After a login POST, the URL can still be /s/TMSLGN01/ even
             // though the returned page contains the staff-menu form.
