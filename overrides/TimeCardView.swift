@@ -161,6 +161,12 @@ final class NativeNavigationModel: ObservableObject {
     @Published var nativeSubmissionInFlight = false
     @Published var nativeSettingsOpen = false
     @Published var nativeLoginReady = false
+    @Published var recoveryActive = false
+    @Published var recoveryLoading = false
+    @Published var recoveryMessage = ""
+    @Published var recoveryAutomatic = false
+    var recoveryLoginHandler: (() -> Void)?
+    func openRecoveryLogin() { recoveryLoginHandler?() }
     @Published var showOfficial = false
     var nativeReminderHandler: ((String, Bool, Int, Int, Int) -> Void)?
     var salaryUpdateHandler: (() -> Void)?
@@ -348,7 +354,7 @@ final class NativeNavigationModel: ObservableObject {
         }
         nativeSettingsOpen = false
         showOfficial = false
-        guard ["home", "daily", "close", "settings"].contains(destination),
+        guard !recoveryActive, ["home", "daily", "close", "settings"].contains(destination),
               let webView = webView else { return }
         // Do not re-enter an already-active official page: the site can reject
         // repeated navigation across its stateful attendance workflow.
@@ -434,10 +440,10 @@ struct TimeCardView: View {
     @StateObject private var navigation = NativeNavigationModel()
 
     private var showNavigation: Bool {
-        navigation.isVisible && !navigation.sheetOpen && !navigation.dashboardLoading && navigation.openingCalendarDay == nil
+        !navigation.recoveryActive && navigation.isVisible && !navigation.sheetOpen && !navigation.dashboardLoading && navigation.openingCalendarDay == nil
     }
     private var showNativeScreen: Bool {
-        (navigation.isVisible || (navigation.page == "login" && navigation.nativeLoginReady)) && !navigation.showOfficial && !navigation.dashboardLoading &&
+        !navigation.recoveryActive && (navigation.isVisible || (navigation.page == "login" && navigation.nativeLoginReady)) && !navigation.showOfficial && !navigation.dashboardLoading &&
         navigation.openingCalendarDay == nil && (navigation.nativeSettingsOpen ||
           navigation.page == "home" || navigation.page == "close" || navigation.page == "login" ||
           (navigation.page == "daily" && navigation.nativeDailyReady))
@@ -493,7 +499,7 @@ struct TimeCardView: View {
                                 .buttonStyle(.bordered).padding(.top,8)
                         }.padding(26)
                     }
-                    if navigation.dashboardLoading {
+                    if navigation.dashboardLoading && !navigation.recoveryActive {
                         Color(uiColor: .systemBackground).ignoresSafeArea()
                         VStack(spacing: 16) {
                             Image(systemName: "calendar.badge.clock")
@@ -511,6 +517,13 @@ struct TimeCardView: View {
                     }
                 }
                 .background(Color(uiColor: .systemGroupedBackground))
+                .overlay {
+                    if navigation.recoveryActive {
+                        NativeSessionRecoveryScreen(model: navigation)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+                    }
+                }
                 .onAppear { navigation.wideDisplay = geometry.size.width >= 690 }
                 .onChange(of: geometry.size.width) { _, width in
                     navigation.wideDisplay = width >= 690
@@ -595,6 +608,9 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
         navigation.calendarDayRouteCancel = { [weak coordinator = context.coordinator] in
             coordinator?.cancelCalendarDay()
         }
+        navigation.recoveryLoginHandler = { [weak coordinator = context.coordinator] in
+            coordinator?.openRecoveryLoginManually()
+        }
         navigation.nativeReminderHandler = { [weak coordinator = context.coordinator] kind, enabled, hour, minute, day in
             coordinator?.updateReminderFromNative(kind: kind, enabled: enabled, hour: hour, minute: minute, day: day)
         }
@@ -639,6 +655,13 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
         private var automaticSignInAttempted = false
         private var authenticationInProgress = false
         private var lastSubmissionWasAutomatic = false
+        // Reauthentication is a fresh official login, never a replay of the
+        // rejected request. At most one automatic recovery per app session.
+        private var recoveryAutoAttempted = false
+        private var recoveryAwaitingLogin = false
+        private var recoveryAutoSubmitting = false
+        private var recoveryManualRequested = false
+        private var recoveryGeneration = 0
         // An automatic, sequential official-page visit ONCE per app launch.
         // Never open a second WKWebView or issue parallel session requests.
         private var dashboardRefreshAttempted = false
@@ -728,6 +751,170 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
             }
         }
 
+
+        private func showRecovery(message: String) {
+            if !navigation.recoveryActive {
+                navigation.recoveryActive = true
+                recoveryManualRequested = false
+                navigation.recoveryMessage = message
+                navigation.recoveryAutomatic = false
+                navigation.recoveryLoading = false
+                cancelDashboardRefresh()
+                if calendarRouteDate != nil { cancelCalendarDay() }
+                navigation.nativeCanDailyApply = false
+                navigation.nativeCanCloseApply = false
+                navigation.nativeDailyReady = false
+                navigation.showOfficial = false
+                if navigation.nativeSubmissionInFlight {
+                    navigation.nativeSubmissionInFlight = false
+                    navigation.nativeSubmissionState = "verify"
+                    navigation.nativeSubmissionMessage = "申請結果は不明です。再ログイン後に履歴を確認してください。"
+                }
+            }
+            guard !recoveryAutoAttempted,
+                  !recoveryAwaitingLogin,
+                  UserDefaults.standard.object(forKey: "etc-duo-recovery.autoSignIn") as? Bool ?? true,
+                  CredentialVault.exists() else { return }
+            recoveryAutoAttempted = true
+            navigation.recoveryAutomatic = true
+            navigation.recoveryLoading = true
+            navigation.recoveryMessage = "公式ログイン画面へ安全に移動しています…"
+            followOfficialLoginLink()
+        }
+
+        private func followOfficialLoginLink() {
+            guard let webView = webView, let url = webView.url,
+                  isOfficialPage(url), navigation.recoveryActive else {
+                navigation.recoveryLoading = false
+                return
+            }
+            recoveryAwaitingLogin = true
+            recoveryGeneration += 1
+            let generation = recoveryGeneration
+            // Click only the site's own explicit login link, never browser Back
+            // and never resubmit the rejected Struts request.
+            let script = """
+            (() => {
+                const anchors = [...document.querySelectorAll('a[href]')];
+                const link = anchors.find(a => {
+                    const text = (a.textContent || '').replace(/\\s+/g,' ').trim();
+                    if (!text.includes('ログイン画面へ')) return false;
+                    try {
+                        const url = new URL(a.href, location.href);
+                        return url.origin === 'https://m.e-staffing.ne.jp' &&
+                               url.pathname.startsWith('/s/');
+                    } catch (_) { return false; }
+                });
+                if (!link) return false;
+                link.click();
+                return true;
+            })()
+            """
+            webView.evaluateJavaScript(script) { [weak self] result, error in
+                guard let self = self, generation == self.recoveryGeneration,
+                      self.navigation.recoveryActive else { return }
+                if error != nil || (result as? Bool) != true {
+                    self.recoveryAwaitingLogin = false
+                    self.navigation.recoveryLoading = false
+                    self.navigation.recoveryMessage =
+                        "公式ログイン画面へ移動できませんでした。下のボタンからログインしてください。"
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 14) { [weak self] in
+                guard let self = self, generation == self.recoveryGeneration,
+                      self.recoveryAwaitingLogin else { return }
+                self.recoveryAwaitingLogin = false
+                self.navigation.recoveryLoading = false
+                self.navigation.recoveryMessage = "自動接続を確認できません。ログイン画面からお試しください。"
+            }
+        }
+
+        func openRecoveryLoginManually() {
+            guard navigation.recoveryActive, !recoveryAutoSubmitting else { return }
+            // The manual path does not read saved credentials without the
+            // user's action and never silently retries the rejected action.
+            automaticSignInAttempted = true
+            recoveryManualRequested = true
+            recoveryGeneration += 1
+            recoveryAwaitingLogin = false
+            recoveryAutoSubmitting = false
+            navigation.recoveryAutomatic = false
+            navigation.recoveryLoading = true
+            navigation.recoveryMessage = "公式ログイン画面を開いています…"
+            guard let webView = webView, let url = webView.url, isOfficialPage(url) else {
+                navigation.recoveryLoading = false
+                navigation.recoveryMessage = "公式サイトに接続できません。通信状況を確認してください。"
+                return
+            }
+            if navigation.page == "login" && navigation.nativeLoginReady {
+                navigation.recoveryActive = false
+                navigation.recoveryLoading = false
+                return
+            }
+            // When no official login anchor is present, start from the known
+            // initial official home route; do not clear session cookies.
+            let script = """
+            (() => {
+                const link = [...document.querySelectorAll('a[href]')].find(a =>
+                    (a.textContent||'').includes('ログイン画面へ') &&
+                    a.origin === 'https://m.e-staffing.ne.jp' &&
+                    new URL(a.href).pathname.startsWith('/s/'));
+                if (!link) return false;
+                link.click(); return true;
+            })()
+            """
+            webView.evaluateJavaScript(script) { [weak self, weak webView] result, error in
+                guard let self = self, self.navigation.recoveryActive,
+                      let view = webView, self.webView === view else { return }
+                if error != nil || (result as? Bool) != true {
+                    view.load(URLRequest(url: URL(string:"https://m.e-staffing.ne.jp/s/")!))
+                }
+            }
+        }
+
+        private func submitRecoveryCredentialsWithoutBiometrics() {
+            guard recoveryAwaitingLogin, !recoveryAutoSubmitting,
+                  navigation.recoveryActive, CredentialVault.exists(),
+                  let view = webView, let url = view.url, isOfficialPage(url),
+                  let credential = CredentialVault.read() else {
+                navigation.recoveryLoading = false
+                navigation.recoveryMessage = "保存済みのログイン情報を使用できません。手動でログインしてください。"
+                return
+            }
+            recoveryAwaitingLogin = false
+            recoveryManualRequested = false
+            recoveryAutoSubmitting = true
+            navigation.recoveryMessage = "保存済みアカウントでログインしています…"
+            guard let json = jsonLiteral([
+                "companyID": credential.companyID,
+                "userID": credential.userID,
+                "password": credential.password
+            ]) else {
+                recoveryAutoSubmitting = false
+                navigation.recoveryLoading = false
+                return
+            }
+            // Keychain uses WhenUnlockedThisDeviceOnly: this works only while
+            // the device is unlocked. No new key storage or cookie extraction.
+            // The JS helper validates the official login form/action.
+            lastSubmissionWasAutomatic = true
+            automaticSignInAttempted = true
+            view.evaluateJavaScript("window.__etcCredentialAutoSubmit?.(\(json))") { [weak self] result, error in
+                guard let self = self, self.navigation.recoveryActive else { return }
+                if error == nil, let ok = result as? Bool, !ok {
+                    self.recoveryAutoSubmitting = false
+                    self.navigation.recoveryLoading = false
+                    self.navigation.recoveryMessage = "公式ログインフォームが変更されたため、自動再ログインできませんでした。"
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 17) { [weak self] in
+                guard let self = self, self.recoveryAutoSubmitting,
+                      self.navigation.recoveryActive else { return }
+                self.recoveryAutoSubmitting = false
+                self.navigation.recoveryLoading = false
+                self.navigation.recoveryMessage = "ログイン完了を確認できませんでした。手動ログインを利用してください。"
+            }
+        }
 
         // The e-staffing service may redirect to URLs without /s/ (or to
         // another official e-staffing subdomain).  A redirect is NOT a tap.
@@ -969,22 +1156,51 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                 self.navigation.nativeSubmissionInFlight = false
             }
             guard let url = webView.url, isOfficialPage(url) else { return }
-            // After a login POST, the URL can still be /s/TMSLGN01/ even
-            // though the returned page contains the staff-menu form.
+            // Inspect only this trusted page's visible error text. Never send
+            // cookies, hidden fields or URLs to the native UI.
             let test = """
-            ({home: !!document.querySelector('form[name="TMSMNU01ActionForm"]'),
-              login: !!document.querySelector('form[name="TMSLGN01ActionForm"]'),
-              close: !!document.querySelector('form[name="TMSINP02ActionForm"]'),
-              daily: !!document.querySelector('form[name="TMSINP01ActionForm"]')})
+            (() => {
+                const body = (document.body?.innerText || '').slice(0,12000);
+                return {
+                    unauthorized: body.includes('許可されていない操作が検知されました') &&
+                                  body.includes('ログイン画面へ'),
+                    home: !!document.querySelector('form[name="TMSMNU01ActionForm"]'),
+                    login: !!document.querySelector('form[name="TMSLGN01ActionForm"]'),
+                    close: !!document.querySelector('form[name="TMSINP02ActionForm"]'),
+                    daily: !!document.querySelector('form[name="TMSINP01ActionForm"]')
+                };
+            })()
             """
-            publishDashboard()
-            publishMonthCalendar()
-            sendSalaryStatus()
             webView.evaluateJavaScript(test) { [weak self, weak webView] result, error in
                 guard let self = self, let webView = webView,
                       self.webView === webView,
                       error == nil, let state = result as? [String: Bool] else { return }
+                if state["unauthorized"] == true {
+                    if self.navigation.recoveryActive && self.recoveryAutoAttempted {
+                        self.recoveryAwaitingLogin = false
+                        self.recoveryAutoSubmitting = false
+                        self.navigation.recoveryLoading = false
+                        self.navigation.recoveryMessage =
+                            "自動再接続は完了できませんでした。公式ログイン画面からログインしてください。"
+                    } else {
+                        self.showRecovery(message: "e-staffingが操作を拒否しました。再ログインが必要です。")
+                    }
+                    return
+                }
+                self.publishDashboard()
+                self.publishMonthCalendar()
+                self.sendSalaryStatus()
                 if state["home"] == true {
+                    if self.navigation.recoveryActive {
+                        self.recoveryManualRequested = false
+                        self.recoveryAutoSubmitting = false
+                        self.recoveryAwaitingLogin = false
+                        self.recoveryGeneration += 1
+                        self.navigation.recoveryActive = false
+                        self.navigation.recoveryLoading = false
+                        self.navigation.recoveryAutomatic = false
+                        self.navigation.recoveryMessage = ""
+                    }
                     self.navigation.nativeLoginReady = false
                     self.navigation.page = "home"
                     self.navigation.isVisible = true
@@ -1002,6 +1218,20 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                     }
                     self.beginAutomaticDashboardRefresh()
                 } else if state["login"] == true {
+                    if self.navigation.recoveryActive && self.recoveryManualRequested {
+                        self.recoveryManualRequested = false
+                        self.recoveryGeneration += 1
+                        self.navigation.recoveryActive = false
+                        self.navigation.recoveryLoading = false
+                        self.navigation.recoveryAutomatic = false
+                        self.navigation.recoveryMessage = ""
+                    }
+                    if self.navigation.recoveryActive && self.recoveryAutoSubmitting {
+                        self.recoveryAutoSubmitting = false
+                        self.navigation.recoveryLoading = false
+                        self.navigation.recoveryMessage =
+                            "自動ログインできませんでした。ID・パスワードを確認してください。"
+                    }
                     self.navigation.nativeLoginReady = true
                     self.navigation.page = "login"
                     self.navigation.isVisible = false
@@ -1012,7 +1242,13 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                     self.dashboardWaitingForSecond = false
                     self.dashboardReturning = false
                     self.navigation.dashboardLoading = false
-                    if self.pending != nil {
+                    if self.recoveryAwaitingLogin {
+                        self.submitRecoveryCredentialsWithoutBiometrics()
+                    } else if self.navigation.recoveryActive {
+                        // Recovery already tried; do not let the ordinary
+                        // startup Face ID flow loop or hide the error.
+                        self.lastSubmissionWasAutomatic = false
+                    } else if self.pending != nil {
                         self.pending = nil  // Never retry incorrect credentials automatically.
                         if self.lastSubmissionWasAutomatic {
                             self.status("自動ログインできませんでした。ID・パスワードを確認するか、手動でログインしてください。")
