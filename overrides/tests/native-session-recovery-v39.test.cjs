@@ -9,7 +9,7 @@ function expect(source, fragments) {
   fragments.forEach(key=>assert(source.includes(key),'Missing: '+key));
 }
 expect(swift,[
-  'native-session-recovery', 'recoveryActive = false',
+  'recoveryActive = false',
   'private var recoveryAutoAttempted = false',
   'private func showRecovery(message: String)',
   "body.includes('許可されていない操作が検知されました')",
@@ -43,7 +43,7 @@ assert(app.includes('if navigation.recoveryActive'));
 assert(app.includes('NativeSessionRecoveryScreen(model: navigation)'));
 assert(app.includes('!navigation.recoveryActive && navigation.isVisible'),'Hide bottom nav during recovery');
 expect(screen,[
-  'struct NativeSessionRecoveryScreen: View', 'exclamationmark.shield.fill',
+  'struct NativeSessionRecoveryScreen: View', 'native-session-recovery', 'exclamationmark.shield.fill',
   '再ログインが必要です', 'session-recovery-open-login',
   'モデル', // placeholder intentionally removed below
   '@AppStorage("etc-duo-recovery.autoSignIn")',
