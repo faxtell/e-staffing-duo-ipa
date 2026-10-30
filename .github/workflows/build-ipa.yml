@@ -1,8 +1,8 @@
 name: Build iPhone Duo IPA (iOS 27.1)
 on:
   push:
-    branches: [main]
-    paths: ['project.zip', '.github/workflows/build-ipa.yml']
+    branches: [main, 'feat/**']
+    paths: ['project.zip', '.github/workflows/build-ipa.yml', 'overrides/**']
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,6 +22,16 @@ jobs:
           mkdir -p source
           unzip -q project.zip -d source
           test -f source/scripts/build-unsigned-ipa.sh
+      - name: Apply native screen updates
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f overrides/NativeScreens.swift; then
+            cp overrides/NativeScreens.swift source/EStaffingTimeCard/NativeScreens.swift
+          fi
+          if test -d overrides/tests; then
+            cp overrides/tests/*.cjs source/tests/
+          fi
       - name: Select Xcode 27.1
         shell: bash
         run: |
@@ -83,10 +93,10 @@ jobs:
           cd source
           swiftc EStaffingTimeCard/ShiftEndForecast.swift tests/shift-forecast.swift -o /tmp/shift-forecast-test
           /tmp/shift-forecast-test
-          node tests/shift-forecast-ui.test.cjs
+          if test -f tests/shift-forecast-v35.test.cjs; then node tests/shift-forecast-v35.test.cjs; else node tests/shift-forecast-ui.test.cjs; fi
       - name: Test simplified native workflows
         shell: bash
-        run: cd source && node tests/native-compact-v34.test.cjs
+        run: cd source && if test -f tests/native-compact-v35.test.cjs; then node tests/native-compact-v35.test.cjs; else node tests/native-compact-v34.test.cjs; fi
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
