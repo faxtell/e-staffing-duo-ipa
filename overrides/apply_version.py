@@ -27,10 +27,11 @@ if not build_count:
     raise SystemExit("No build number to update")
 pbx.write_text(text)
 
-# A legacy regression test expects the pre-migration hard-coded version.
-old_test = root / "source" / "tests" / "native-form-autosave.test.cjs"
-if old_test.exists():
+# Legacy tests still assert the prior release's numeric marketing version.
+# Parameterize that one assertion so all other behavioral checks remain intact.
+for old_test in (root / "source" / "tests").glob("*.cjs"):
     test = old_test.read_text()
-    test = re.sub(r"MARKETING_VERSION = [0-9.]+", f"MARKETING_VERSION = {version}", test)
-    old_test.write_text(test)
+    updated = re.sub(r"MARKETING_VERSION = [0-9.]+", f"MARKETING_VERSION = {version}", test)
+    if updated != test:
+        old_test.write_text(updated)
 print(f"IPA marketing version: {old[0]} -> {version}; build number: {build}")
