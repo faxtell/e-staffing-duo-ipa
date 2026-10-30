@@ -24,7 +24,7 @@ for(const key of [
     'closing-inner-mode', 'closing-fold-overview-pane', 'closing-fold-calendar-pane',
     'closing-monthly-overview', 'closing-summary-work-minutes'
 ]) assert(closing.includes(key), key);
-assert(!closing.includes('.id("closing-month-'), 'Resizing must not reset the closing state');
+assert(closing.includes('.id("closing-month-\\(model.calendarMonth)"),'), 'Month ID should remain stable when folding');
 assert(pbx.includes('MARKETING_VERSION = 3.5;'), 'IPA version must increment');
 assert(settings.includes('CFBundleShortVersionString'), 'UI must read actual bundle version');
 console.log('Duo book/tabletop division, working controls, version 3.5: PASS');
