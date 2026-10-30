@@ -10,7 +10,7 @@ const pbx=fs.readFileSync(path.join(root,'EStaffingTimeCard.xcodeproj/project.pb
 function fixture(kind) {
   const events=[],clicks=[];
   class Input {
-    constructor(name,value=''){this.name=name;this.type='submit';this.disabled=false;this.value=value;this.dataset={};}
+    constructor(name,value=''){this.name=name;this.type='submit';this.tagName='INPUT';this.readOnly=false;this.disabled=false;this.value=value;this.dataset={};}
     closest(which){return which==='form'?form:null}
     click(){clicks.push(this.name)}
     dispatchEvent(){}
