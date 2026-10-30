@@ -116,7 +116,7 @@ struct NativeHomeScreen: View {
 
 struct NativeDailyScreen: View {
     @ObservedObject var model: NativeNavigationModel
-    @State private var confirmedApply = false
+    @State private var confirmDailyApplication = false
     @State private var tabletopDetailsExpanded = false
     // The forecast and the official break field share a single source of truth.
     @AppStorage("etc-duo-v33.shift.netMinutes") private var shiftNetMinutes = 450
@@ -144,6 +144,11 @@ struct NativeDailyScreen: View {
         let comps=Calendar.current.dateComponents([.hour,.minute],from:date)
         let value=String(format:"%02d%02d",comps.hour ?? 0,comps.minute ?? 0)
         model.nativeFormAction(["kind":"field","name":name,"value":value])
+    }
+    private var canApplyDaily: Bool {
+        model.nativeCanDailyApply && !model.nativeSubmissionInFlight &&
+        !model.navigationInProgress &&
+        !["pending", "sending", "error", "verify", "local"].contains(model.nativeSaveState)
     }
     private var saveText:String {
         switch model.nativeSaveState {
@@ -315,11 +320,23 @@ struct NativeDailyScreen: View {
                             .disabled(model.nativeSaveState == "sending")
                     }
                 }
-                Button { model.showOfficial = true } label: {
-                    Label("詳細入力・申請",systemImage:"square.and.pencil")
-                        .frame(maxWidth:.infinity)
+                HStack(spacing: 10) {
+                    Button { confirmDailyApplication = true } label: {
+                        Label("日々申請", systemImage: "checkmark.seal")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .disabled(!canApplyDaily)
+                    .accessibilityIdentifier("daily-native-apply")
+                    Button { model.showOfficial = true } label: {
+                        Label("公式画面", systemImage: "arrow.up.right")
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
                 }
-                .buttonStyle(.borderedProminent).controlSize(.large)
+                if !model.nativeSubmissionMessage.isEmpty {
+                    Label(model.nativeSubmissionMessage, systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
         }
     }
     private var dailyWorkPane: some View {
@@ -489,10 +506,17 @@ struct NativeDailyScreen: View {
                         .buttonStyle(.bordered).controlSize(.small)
                         .disabled(model.nativeSaveState == "sending")
                 }
-                Button { model.showOfficial = true } label: {
-                    Label("詳細・申請", systemImage: "arrow.up.right")
+                Button { confirmDailyApplication = true } label: {
+                    Label("日々申請", systemImage: "checkmark.seal")
                 }
                 .buttonStyle(.borderedProminent).controlSize(.small)
+                .disabled(!canApplyDaily)
+                .accessibilityIdentifier("tabletop-daily-native-apply")
+                Button { model.showOfficial = true } label: {
+                    Image(systemName: "arrow.up.right.square")
+                }
+                .accessibilityLabel("公式画面で確認")
+                .buttonStyle(.bordered).controlSize(.small)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(Color(uiColor: .secondarySystemGroupedBackground))
@@ -535,6 +559,12 @@ struct NativeDailyScreen: View {
                 }
                 .accessibilityIdentifier("daily-responsive-standard")
             }
+        }
+        .alert("日々勤怠を申請しますか？", isPresented: $confirmDailyApplication) {
+            Button("キャンセル", role: .cancel) {}
+            Button("日々申請する") { model.nativeSubmit("daily") }
+        } message: {
+            Text("対象：\(model.nativeDailyApplyPeriod)\n入力した勤怠を公式e-staffingへ申請します。一時保存とは異なり、取り消しや修正には制限がある場合があります。")
         }
     }
     private func timeItem(_ label:String,name:String)->some View {
@@ -798,6 +828,40 @@ private struct NativeClosingTabletopCalendar: View {
 
 struct NativeClosingScreen: View {
     @ObservedObject var model: NativeNavigationModel
+    @State private var confirmCloseApplication = false
+    private var canApplyClosing: Bool {
+        model.nativeCanCloseApply && !model.navigationInProgress &&
+        !model.dashboardLoading && !model.nativeSubmissionInFlight
+    }
+    private var closeSubmitControls: some View {
+        HStack(spacing: 8) {
+            Button { confirmCloseApplication = true } label: {
+                Label("締め申請", systemImage: "checkmark.seal")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(!canApplyClosing)
+            .accessibilityIdentifier("closing-native-apply")
+            Button { model.showOfficial = true } label: {
+                Label("公式画面", systemImage: "arrow.up.right")
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+        }
+    }
+    private var closeApplicationNotice: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if !model.nativeCloseApplyPeriod.isEmpty {
+                Text("申請対象：\(model.nativeCloseApplyPeriod)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("締め申請は公式画面で表示中の締め期間が対象です。月間集計全体とは限りません。")
+                .font(.caption2).foregroundStyle(.secondary)
+            if !model.nativeSubmissionMessage.isEmpty {
+                Label(model.nativeSubmissionMessage, systemImage: "info.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
     private func mins(_ m:Int) -> String { "\(m / 60)時間\(String(format:"%02d",m % 60))分" }
     private var leaveCount: Int {
         model.calendarRows.values.filter { $0.known && $0.leave }.count
@@ -825,11 +889,7 @@ struct NativeClosingScreen: View {
                 }
             }
             Spacer(minLength: 4)
-            Button { model.showOfficial = true } label: {
-                Label("申請・履歴", systemImage: "checkmark.seal")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            closeSubmitControls
         }
     }
     private func closingSummary(columns: Int) -> some View {
@@ -872,6 +932,7 @@ struct NativeClosingScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 closingHeading
+                closeApplicationNotice
                 closingSummary(columns: 2)
                 closingRecords(month: month)
             }
@@ -901,6 +962,7 @@ struct NativeClosingScreen: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 closingSummary(columns: width >= 600 ? 4 : 2)
+                closeApplicationNotice
                 NativeClosingTabletopCalendar(model: model, month: month)
                     .padding(12)
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
@@ -929,11 +991,19 @@ struct NativeClosingScreen: View {
                     .frame(maxWidth: 640).frame(maxWidth: .infinity)
             }
             Divider()
-            Button { model.showOfficial = true } label: {
-                Label("締め申請・履歴を確認", systemImage: "checkmark.seal")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 10) {
+                Button { confirmCloseApplication = true } label: {
+                    Label("締め申請する", systemImage: "checkmark.seal")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canApplyClosing)
+                .accessibilityIdentifier("tabletop-closing-native-apply")
+                Button { model.showOfficial = true } label: {
+                    Label("公式履歴", systemImage: "arrow.up.right")
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
             .controlSize(.regular)
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(Color(uiColor: .secondarySystemGroupedBackground))
@@ -974,6 +1044,7 @@ struct NativeClosingScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
                         closingHeading
+                        closeApplicationNotice
                         if model.calendarMonth.count == 7 {
                             let month = ClosingMonthData(model.calendarMonth)
                             closingSummary(columns: expanded ? 4 : 2)
@@ -996,6 +1067,12 @@ struct NativeClosingScreen: View {
         // Fold/unfold must not discard the selected month or reset the screen.
         .accessibilityIdentifier("closing-responsive")
         .id("closing-month-\(model.calendarMonth)")
+        .alert("締め申請を送信しますか？", isPresented: $confirmCloseApplication) {
+            Button("キャンセル", role: .cancel) {}
+            Button("締め申請する") { model.nativeSubmit("close") }
+        } message: {
+            Text("対象：\(model.nativeCloseApplyPeriod)\n公式e-staffingで現在表示されている締め期間の申請です。表示中の月全体ではありません。送信後は申請結果を確認してください。")
+        }
     }
 }
 
