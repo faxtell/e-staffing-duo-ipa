@@ -145,6 +145,10 @@ final class NativeNavigationModel: ObservableObject {
     @Published var nativeCategory: [[String: Any]] = []
     @Published var nativeWorkplace: [[String: Any]] = []
     @Published var nativeDailyReady = false
+    @Published var nativeDailyLocked = false
+    @Published var nativeDailyApprovalStatus = ""
+    @Published var nativeDailyCategoryDisplay = ""
+    @Published var nativeDailyWorkplaceDisplay = ""
     @Published var nativeSaveState = "idle"
     @Published var nativeDayTitle = ""
     @Published var nativeCanSave = false
@@ -243,7 +247,7 @@ final class NativeNavigationModel: ObservableObject {
     }
 
     func nativeFormAction(_ payload: [String: Any]) {
-        guard page == "daily", !navigationInProgress,
+        guard page == "daily", !nativeDailyLocked, !navigationInProgress,
               let webView = webView,
               let url = webView.url, url.host == "m.e-staffing.ne.jp",
               url.path.hasPrefix("/s/") else { return }
@@ -262,7 +266,7 @@ final class NativeNavigationModel: ObservableObject {
                   let available = payload["available"] as? Bool else { return }
             if kind == "daily" {
                 nativeDailyApplyPeriod = period
-                nativeCanDailyApply = available && !nativeSubmissionInFlight
+                nativeCanDailyApply = available && !nativeDailyLocked && !nativeSubmissionInFlight
             } else {
                 nativeCloseApplyPeriod = period
                 nativeCanCloseApply = available && !nativeSubmissionInFlight
@@ -288,7 +292,7 @@ final class NativeNavigationModel: ObservableObject {
     func nativeSubmit(_ kind: String) {
         guard ["daily", "close"].contains(kind),
               !navigationInProgress, !dashboardLoading, !nativeSubmissionInFlight,
-              page == kind,
+              page == kind, !(kind == "daily" && nativeDailyLocked),
               let webView = webView, let url = webView.url,
               url.scheme == "https", url.host == "m.e-staffing.ne.jp",
               url.path.hasPrefix("/s/"),
@@ -321,12 +325,18 @@ final class NativeNavigationModel: ObservableObject {
         guard let fields = payload["fields"] as? [String: String],
               let category = payload["category"] as? [String: Any],
               let workplace = payload["workplace"] as? [String: Any] else { return }
+        let locked = payload["readOnly"] as? Bool ?? false
+        nativeDailyLocked = locked
+        nativeDailyApprovalStatus = String((payload["approvalStatus"] as? String ?? "").prefix(40))
         nativeDailyFields = fields
-        nativeCategory = category["options"] as? [[String: Any]] ?? []
-        nativeWorkplace = workplace["options"] as? [[String: Any]] ?? []
-        nativeCanSave = payload["canSave"] as? Bool ?? false
+        nativeCategory = locked ? [] : (category["options"] as? [[String: Any]] ?? [])
+        nativeWorkplace = locked ? [] : (workplace["options"] as? [[String: Any]] ?? [])
+        nativeDailyCategoryDisplay = String((category["value"] as? String ?? "").prefix(100))
+        nativeDailyWorkplaceDisplay = String((workplace["value"] as? String ?? "").prefix(100))
+        nativeCanSave = !locked && (payload["canSave"] as? Bool ?? false)
+        if locked { nativeCanDailyApply = false }
         nativeDayTitle = payload["date"] as? String ?? ""
-        nativeSaveState = payload["autosave"] as? String ?? "idle"
+        nativeSaveState = locked ? "locked" : (payload["autosave"] as? String ?? "idle")
         nativeDailyReady = true
     }
 
@@ -368,7 +378,16 @@ final class NativeNavigationModel: ObservableObject {
         guard let state = info["page"] as? String,
               ["login", "home", "daily", "close", "settings", "other"].contains(state) else { return }
         if page != state {
-            if state == "daily" { nativeDailyReady = false }
+            if state == "daily" {
+                nativeDailyReady = false
+                nativeDailyLocked = false
+                nativeDailyFields = [:]
+                nativeCategory = []
+                nativeWorkplace = []
+                nativeDailyCategoryDisplay = ""
+                nativeDailyWorkplaceDisplay = ""
+                nativeDailyApprovalStatus = ""
+            }
             nativeCanDailyApply = false
             nativeCanCloseApply = false
             nativeDailyApplyPeriod = ""
