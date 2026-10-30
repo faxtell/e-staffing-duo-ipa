@@ -718,6 +718,7 @@ struct NativeClosingScreen: View {
         }
         // Fold/unfold must not discard the selected month or reset the screen.
         .accessibilityIdentifier("closing-responsive")
+        .id("closing-month-\(model.calendarMonth)")
     }
 }
 
