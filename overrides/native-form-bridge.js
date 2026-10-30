@@ -54,6 +54,7 @@
     period: submissionPeriod(), available: nativeSubmissionReady()
   });
   window.__etcNativeSubmission = payload => {
+    if (form && isLocked()) return false;
     if (!payload || payload.kind !== 'submit' || payload.form !== submissionKind ||
         payload.confirmed !== true || typeof payload.period !== 'string' ||
         payload.period !== submissionPeriod() || !nativeSubmissionReady()) return false;
