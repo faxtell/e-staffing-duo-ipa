@@ -29,6 +29,12 @@ jobs:
           if test -f overrides/NativeScreens.swift; then
             cp overrides/NativeScreens.swift source/EStaffingTimeCard/NativeScreens.swift
           fi
+          if test -f overrides/TimeCardView.swift; then
+            cp overrides/TimeCardView.swift source/EStaffingTimeCard/TimeCardView.swift
+          fi
+          if test -f overrides/native-form-bridge.js; then
+            cp overrides/native-form-bridge.js source/EStaffingTimeCard/Resources/native-form-bridge.js
+          fi
           if test -d overrides/tests; then
             cp overrides/tests/*.cjs source/tests/
           fi
