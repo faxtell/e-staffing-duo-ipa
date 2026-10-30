@@ -820,7 +820,7 @@ struct NativeClosingList: View {
                             .fill(row?.leave == true ? Color.purple : row?.work == true ? .green : .clear)
                             .frame(width:3)
                         VStack(alignment:.leading,spacing:5) {
-                            Text(row?.work == true && !(row?.hours.isEmpty ?? true) ? row!.hours : closingStatus(row))
+                            Text(row?.leave == true ? "年休" : row?.work == true && !(row?.hours.isEmpty ?? true) ? row!.hours : closingStatus(row))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary).lineLimit(2)
                             let detail=[row?.place ?? "",(row?.rest.isEmpty == false ? "休憩 \(row!.rest)" : ""),
@@ -891,7 +891,7 @@ struct NativeClosingMonthCalendar: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("\(day)").font(.subheadline.weight(.bold))
                     .foregroundStyle(row?.holiday.isEmpty == false ? Color.red : Color.primary)
-                if row?.work == true {
+                if row?.work == true && row?.leave != true {
                     Text(row?.hours ?? "")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.primary).lineLimit(2).minimumScaleFactor(0.75)
@@ -956,8 +956,8 @@ private struct NativeClosingTabletopCalendar: View {
                                         .monospacedDigit()
                                         .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
                                     Circle()
-                                        .fill(record?.work == true ? Color.green :
-                                              record?.leave == true ? Color.purple : Color.clear)
+                                        .fill(record?.leave == true ? Color.purple :
+                                              record?.work == true ? Color.green : Color.clear)
                                         .frame(width: 4, height: 4)
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 29)
