@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '..');
+const screens = fs.readFileSync(path.join(root, 'EStaffingTimeCard/NativeScreens.swift'), 'utf8');
+const helper = fs.readFileSync(path.join(root, 'EStaffingTimeCard/ShiftEndForecast.swift'), 'utf8');
+const bridge = fs.readFileSync(path.join(root, 'EStaffingTimeCard/Resources/native-form-bridge.js'), 'utf8');
+assert(screens.includes('ShiftEndForecast.endTime(startHHmm: field("startTime")'));
+assert(screens.includes('breakMinutes: previewRestMinutes'));
+assert(screens.includes('daily-expected-end'));
+assert(screens.includes('ForEach([0,30,45,60,90,120]'));
+assert(screens.includes('updateBreakMinutes(rest)'));
+assert(screens.includes('model.nativeFormAction(["kind":"field","name":"rstTime","value":"\\(value)"])'));
+assert(screens.includes('set: { model.nativeFormAction(["kind":"field","name":"rstTime","value":$0]) }'));
+assert(screens.includes('daily-break-minutes-input'));
+assert(bridge.includes('setValue'), 'Bridge must support direct field changes');
+assert(helper.includes('total >= 1440'));
+console.log('Shift forecast and official rest-field editing: PASS');
