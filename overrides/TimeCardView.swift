@@ -789,6 +789,47 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
             return nil
         }
 
+        // The official form may use window.confirm/window.alert for validations.
+        // WKWebView needs an explicit UIDelegate to show those prompts.
+        func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo,
+                     completionHandler: @escaping (Bool) -> Void) {
+            guard frame.isMainFrame, let url = webView.url, isOfficialPage(url),
+                  let host = webView.window?.rootViewController,
+                  host.presentedViewController == nil else {
+                completionHandler(false)
+                return
+            }
+            let alert = UIAlertController(title: "e-staffing の確認",
+                                          message: String(message.prefix(600)),
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel) { _ in
+                completionHandler(false)
+            })
+            alert.addAction(UIAlertAction(title: "確認", style: .default) { _ in
+                completionHandler(true)
+            })
+            host.present(alert, animated: true)
+        }
+
+        func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo,
+                     completionHandler: @escaping () -> Void) {
+            guard frame.isMainFrame, let url = webView.url, isOfficialPage(url),
+                  let host = webView.window?.rootViewController,
+                  host.presentedViewController == nil else {
+                completionHandler()
+                return
+            }
+            let alert = UIAlertController(title: "e-staffing",
+                                          message: String(message.prefix(600)),
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "閉じる", style: .default) { _ in
+                completionHandler()
+            })
+            host.present(alert, animated: true)
+        }
+
         func userContentController(_ controller: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
             // This bridge transmits UI state only (page key/theme/modal flag),
