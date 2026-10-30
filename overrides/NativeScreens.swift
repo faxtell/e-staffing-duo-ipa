@@ -628,12 +628,12 @@ struct NativeClosingScreen: View {
     }
     private func closingCalendar(month: ClosingMonthData) -> some View {
         NativeSurface(title: "月間カレンダー") {
-            NativeClosingMonthCalendar(model: model, month: month)
+            NativeClosingMonthCalendar(model:model,month:month)
         }
     }
     private func closingRecords(month: ClosingMonthData) -> some View {
         NativeSurface(title: "勤務記録") {
-            NativeClosingList(model: model, month: month)
+            NativeClosingList(model:model,month:month)
         }
     }
     private var closingUnavailable: some View {
