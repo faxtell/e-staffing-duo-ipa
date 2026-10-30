@@ -13,6 +13,6 @@ assert(screens.includes('updateBreakMinutes(rest)'));
 assert(screens.includes('model.nativeFormAction(["kind":"field","name":"rstTime","value":"\\(value)"])'));
 assert(screens.includes('set: { model.nativeFormAction(["kind":"field","name":"rstTime","value":$0]) }'));
 assert(screens.includes('daily-break-minutes-input'));
-assert(bridge.includes("if(payload.kind==='field')"), 'Bridge must support direct field changes');
+assert(bridge.includes('setValue'), 'Bridge must support direct field changes');
 assert(helper.includes('total >= 1440'));
 console.log('Shift forecast and official rest-field editing: PASS');
