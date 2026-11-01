@@ -1,7 +1,7 @@
 name: Build iPhone Duo IPA (iOS 27.1)
 on:
   push:
-    branches: [main, 'feat/**']
+    branches: [main, 'feat/**', 'fix/**']
     paths: ['project.zip', '.github/workflows/build-ipa.yml', 'overrides/**']
   workflow_dispatch:
 permissions:
