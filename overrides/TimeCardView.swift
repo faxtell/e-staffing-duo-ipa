@@ -50,7 +50,6 @@ struct NativeCalendarRecord: Identifiable {
 struct NativeCalendarSidebar: View {
     @ObservedObject var model: NativeNavigationModel
     @State private var selected: String = ""
-    private let columns = Array(repeating: GridItem(.flexible(minimum: 23), spacing: 3), count: 7)
     private let weekdays = ["日", "月", "火", "水", "木", "金", "土"]
 
     var body: some View {
@@ -60,34 +59,36 @@ struct NativeCalendarSidebar: View {
             Text(monthTitle)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-            LazyVGrid(columns: columns, spacing: 5) {
-                ForEach(0..<7, id: \.self) { index in
-                    Text(weekdays[index]).font(.caption2).foregroundStyle(index == 0 ? .red : .secondary)
-                }
-                ForEach(0..<firstWeekday, id: \.self) { _ in Color.clear.frame(height: 34) }
-                ForEach(1...max(1, daysInMonth), id: \.self) { day in
-                    let key = model.calendarMonth + String(format: "-%02d", day)
-                    let record = model.calendarRows[key]
-                    Button {
-                        selected = key
-                        // Route through the CURRENT official DOM in the same WKWebView.
-                        // Never replay a cached link or construct a date URL.
-                        model.openCalendarDate(key)
-                    } label: {
-                        VStack(spacing: 2) {
-                            Text("\(day)").font(.system(size: 12, weight: .semibold))
-                            Circle()
-                                .fill(record?.work == true ? Color.green : record?.leave == true ? Color.purple : Color.clear)
-                                .frame(width: 4, height: 4)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                        .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
-                        .background(selected == key ? Color.accentColor.opacity(0.2) : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+            // Weekday headers and date slots must not share ForEach identities:
+            // the old LazyVGrid used weekday IDs 0...6 and day IDs 1...31,
+            // which could cause days 1...6 to disappear on Duo's wide layout.
+            VStack(spacing: 6) {
+                HStack(spacing: 3) {
+                    ForEach(0..<7, id: \.self) { weekday in
+                        Text(weekdays[weekday])
+                            .font(.caption2)
+                            .foregroundStyle(weekday == 0 ? .red : .secondary)
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(day)日、\(label(for: record))")
+                }
+                ForEach(0..<weekCount, id: \.self) { week in
+                    HStack(spacing: 3) {
+                        ForEach(0..<7, id: \.self) { column in
+                            let day = week * 7 + column - firstWeekday + 1
+                            if (1...daysInMonth).contains(day) {
+                                dayButton(day)
+                                    .frame(maxWidth: .infinity)
+                                    .accessibilityIdentifier("sidebar-day-\(day)")
+                            } else {
+                                Color.clear
+                                    .frame(maxWidth: .infinity, minHeight: 34)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                    }
                 }
             }
+            .accessibilityIdentifier("sidebar-full-month-calendar")
             Divider()
             let current = model.calendarRows[selected]
             VStack(alignment: .leading, spacing: 6) {
@@ -113,6 +114,34 @@ struct NativeCalendarSidebar: View {
         .padding(12)
         .background(Color(uiColor: .secondarySystemGroupedBackground))
         .accessibilityIdentifier("read-only-calendar-sidebar")
+    }
+    // Explicit, stable week/column slots render every day 1...month end.
+    private var weekCount: Int {
+        (firstWeekday + daysInMonth + 6) / 7
+    }
+    private func dayButton(_ day: Int) -> some View {
+        let key = model.calendarMonth + String(format: "-%02d", day)
+        let record = model.calendarRows[key]
+        return Button {
+            selected = key
+            // Use the CURRENT official DOM: never replay history or forge URLs.
+            model.openCalendarDate(key)
+        } label: {
+            VStack(spacing: 2) {
+                Text("\(day)").font(.system(size: 12, weight: .semibold))
+                Circle()
+                    .fill(record?.leave == true ? Color.purple :
+                          record?.work == true ? Color.green : Color.clear)
+                    .frame(width: 4, height: 4)
+            }
+            .frame(maxWidth: .infinity, minHeight: 32)
+            .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
+            .background(selected == key ? Color.accentColor.opacity(0.2) :
+                        Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(day)日、\(label(for: record))")
     }
     private func label(for record: NativeCalendarRecord?) -> String {
         guard let record = record else { return "未取得" }
