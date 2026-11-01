@@ -154,6 +154,15 @@
   };
   const displayValue = name => {
     const fromInput = field(name);
+    // An editable official form is authoritative, INCLUDING EMPTY VALUES.
+    // Previous releases interpreted visible labels/quick-entry templates as
+    // saved time values when the input was blank. That fabricated a 09:00 or
+    // 17:30 record on days the official form showed --:--.
+    // Display-cell extraction is only appropriate for approved/read-only pages.
+    if (!isLocked()) {
+      return fromInput && typeof fromInput.value === 'string'
+        ? fromInput.value.trim().slice(0,120) : '';
+    }
     if (fromInput && typeof fromInput.value === 'string' && fromInput.value.trim()) return fromInput.value.slice(0,120);
     const labels = {
       startTime:['開始','出勤'], endTime:['終了','退勤'],
