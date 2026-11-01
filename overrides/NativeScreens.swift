@@ -183,11 +183,16 @@ struct NativeDailyScreen: View {
     @ObservedObject var model: NativeNavigationModel
     @State private var confirmDailyApplication = false
     @State private var tabletopDetailsExpanded = false
+    @State private var editingTimeName: String?
+    @State private var editingTimeValue = Date()
     // The forecast and the official break field share a single source of truth.
     @AppStorage("etc-duo-v33.shift.netMinutes") private var shiftNetMinutes = 450
     @AppStorage("etc-duo-v33.shift.breakMinutes") private var plannedBreakMinutes = 60
     private var previewRestMinutes: Int {
         enteredRestMinutes ?? plannedBreakMinutes
+    }
+    private var previewRestDescription: String {
+        enteredRestMinutes == nil ? "休憩目安\(plannedBreakMinutes)分" : "休憩\(previewRestMinutes)分"
     }
     private func updateBreakMinutes(_ value: Int) {
         guard (0...960).contains(value) else { return }
@@ -417,7 +422,7 @@ struct NativeDailyScreen: View {
                                 .font(.system(.title2,design:.rounded,weight:.bold))
                                 .monospacedDigit()
                                 .accessibilityIdentifier("daily-expected-end")
-                            Text("実働\(duration(shiftNetMinutes)) + 休憩\(previewRestMinutes)分")
+                            Text("実働\(duration(shiftNetMinutes)) + \(previewRestDescription)")
                                 .font(.caption2).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("daily-expected-assumption")
                         }
@@ -431,7 +436,7 @@ struct NativeDailyScreen: View {
                                 }
                             }
                         } label: {
-                            Label("休憩 \(previewRestMinutes)分",systemImage:"chevron.up.chevron.down")
+                            Label(enteredRestMinutes == nil ? "予定休憩 \(plannedBreakMinutes)分" : "休憩 \(previewRestMinutes)分",systemImage:"chevron.up.chevron.down")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -604,7 +609,7 @@ struct NativeDailyScreen: View {
                 }
                 HStack(spacing: 8) {
                     tabletopDailyMetric("目標実働", value: duration(shiftNetMinutes), icon: "timer")
-                    tabletopDailyMetric("休憩", value: "\(previewRestMinutes)分", icon: "cup.and.saucer")
+                    tabletopDailyMetric(enteredRestMinutes == nil ? "予定休憩" : "休憩", value: "\(previewRestMinutes)分", icon: "cup.and.saucer")
                     tabletopDailyMetric("実労働", value: actualWorkMinutes.map(duration) ?? "—", icon: "clock")
                 }
                 if let required = legalMinimumMinutes, let entered = enteredRestMinutes,
@@ -785,8 +790,45 @@ struct NativeDailyScreen: View {
     private func timeItem(_ label:String,name:String)->some View {
         VStack(alignment:.leading,spacing:8) {
             Text(label).font(.caption).foregroundStyle(.secondary)
-            DatePicker("",selection:Binding(get:{timeValue(name)},set:{setTime(name,$0)}),displayedComponents:.hourAndMinute)
-                .labelsHidden().datePickerStyle(.compact).frame(maxWidth:.infinity,alignment:.leading)
+            if minuteOfDay(field(name)) != nil {
+                DatePicker("",selection:Binding(get:{timeValue(name)},set:{setTime(name,$0)}),
+                           displayedComponents:.hourAndMinute)
+                    .labelsHidden().datePickerStyle(.compact)
+                    .frame(maxWidth:.infinity,alignment:.leading)
+            } else {
+                // DatePicker requires a concrete Date. Its former getter used
+                // 09:00/18:00 when the official field was empty, making an
+                // unentered day look like a recorded shift.
+                Button {
+                    editingTimeValue = timeValue(name)
+                    editingTimeName = name
+                } label: {
+                    Label("未入力", systemImage:"clock.badge.questionmark")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth:.infinity,alignment:.leading)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("daily-empty-\(name)")
+                .popover(isPresented: Binding(
+                    get: { editingTimeName == name },
+                    set: { if !$0 { editingTimeName = nil } }
+                )) {
+                    VStack(spacing: 14) {
+                        Text("\(label)時刻を入力").font(.headline)
+                        DatePicker("",selection:$editingTimeValue,displayedComponents:.hourAndMinute)
+                            .labelsHidden().datePickerStyle(.wheel)
+                        Button("この時刻を入力") {
+                            setTime(name,editingTimeValue)
+                            editingTimeName = nil
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button("キャンセル") { editingTimeName = nil }
+                            .buttonStyle(.bordered)
+                    }
+                    .padding(20).frame(minWidth:260)
+                    .presentationCompactAdaptation(.sheet)
+                }
+            }
             Button {setTime(name,Date())} label: {Label("今",systemImage:"clock")}
                 .buttonStyle(.bordered).controlSize(.small)
         }.frame(maxWidth:.infinity,alignment:.leading)
