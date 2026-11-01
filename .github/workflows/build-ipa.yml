@@ -123,6 +123,9 @@ jobs:
       - name: Test Duo sidebar first-week calendar (v3.10)
         shell: bash
         run: cd source && node tests/sidebar-calendar-v310.test.cjs
+      - name: Test no phantom attendance on blank day (v3.11)
+        shell: bash
+        run: cd source && node tests/daily-empty-v311.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
