@@ -129,6 +129,9 @@ jobs:
       - name: Test no phantom attendance on blank day (v3.11)
         shell: bash
         run: cd source && node tests/daily-empty-v311.test.cjs
+      - name: Test first-run walkthrough and custom company ID (v3.13)
+        shell: bash
+        run: cd source && node tests/first-run-setup-v313.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
