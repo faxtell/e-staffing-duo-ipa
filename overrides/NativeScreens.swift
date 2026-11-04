@@ -1333,6 +1333,211 @@ struct NativeClosingScreen: View {
     }
 }
 
+// First-run walkthrough is SwiftUI-only; it never sends credentials or
+// attendance edits. All setup values are ordinary on-device preferences.
+struct NativeFirstRunGuide: View {
+    @AppStorage("etc-duo-account.companyID") private var savedCompanyID = "pasona"
+    @AppStorage("etc-duo-v33.shift.netMinutes") private var shiftNetMinutes = 450
+    @AppStorage("etc-duo-v33.shift.breakMinutes") private var plannedBreakMinutes = 60
+    @AppStorage("etc-duo-recovery.autoSignIn") private var autoRecovery = true
+    @State private var page = 0
+    @State private var companyDraft = ""
+    let onComplete: () -> Void
+
+    private let steps = ["ようこそ", "使い方", "初期設定"]
+    private var companyValid: Bool {
+        let trimmed = companyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed.count <= 128
+    }
+
+    private func complete() {
+        guard companyValid else { return }
+        savedCompanyID = companyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        onComplete()
+    }
+
+    private func feature(_ title: String, detail: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 45, height: 45)
+                .background(Color.accentColor.opacity(0.1),
+                            in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.headline)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(15)
+        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 17))
+    }
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Image(systemName: "checkmark.rectangle.stack.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+                .frame(width: 88, height: 88)
+                .background(Color.accentColor.opacity(0.1),
+                            in: RoundedRectangle(cornerRadius: 25))
+                .padding(.bottom, 6)
+            Text("勤怠管理を、もっと簡単に。")
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("WebTimeCardへようこそ！使い方と初期設定を3ステップでご案内します。")
+                .font(.body).foregroundStyle(.secondary)
+            feature("日々勤怠", detail: "開始・終了・休憩を、使いやすいネイティブ画面で入力します。",
+                    icon: "clock")
+            feature("iPhone Duo", detail: "閉じた状態・本型・卓上の半開きでも、画面に合わせて表示します。",
+                    icon: "rectangle.split.2x1")
+        }
+        .accessibilityIdentifier("onboarding-welcome")
+    }
+
+    private var walkthrough: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("毎日の使い方")
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+            Text("必要な操作が分かれば、あとはいつもどおり。")
+                .foregroundStyle(.secondary)
+            feature("① 日々勤怠", detail: "日付を選び、開始・終了時刻と実際の休憩時間を入力。入力内容は公式フォームへ反映されます。",
+                    icon: "calendar")
+            feature("② 日々申請", detail: "内容を確認してから申請。承認済みの記録は閲覧専用になります。",
+                    icon: "checkmark.seal")
+            feature("③ 締め申請", detail: "勤務記録や月間カレンダーを確認し、対象期間を確かめて申請します。",
+                    icon: "calendar.badge.checkmark")
+            Label("休憩の目安は案内のみ。実際の休憩時間を勝手に入力しません。",
+                  systemImage: "info.circle")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.top, 7)
+        }
+        .accessibilityIdentifier("onboarding-howto")
+    }
+
+    private var setup: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("最初の設定")
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+            Text("いつでも設定画面から変更できます。")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 12) {
+                Label("企業ID", systemImage: "building.2.crop.circle")
+                    .font(.headline)
+                TextField("企業IDを入力", text: $companyDraft)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textContentType(.organizationName)
+                    .submitLabel(.done)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("onboarding-company-id")
+                if !companyValid {
+                    Label("企業IDは1〜128文字で入力してください。", systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.orange)
+                } else {
+                    Text("例：pasona。お勤め先から指定された企業IDを入力してください。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+            .background(Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 17))
+            VStack(alignment: .leading, spacing: 14) {
+                Label("勤務時間の目安", systemImage: "timer")
+                    .font(.headline)
+                Stepper(value: $shiftNetMinutes, in: 60...900, step: 15) {
+                    LabeledContent("目標の実働時間", value: "\(shiftNetMinutes / 60)時間\(shiftNetMinutes % 60 == 0 ? "" : "\(shiftNetMinutes % 60)分")")
+                }
+                Stepper(value: $plannedBreakMinutes, in: 0...240, step: 15) {
+                    LabeledContent("標準休憩", value: "\(plannedBreakMinutes)分")
+                }
+                Text("退勤予定の計算用です。勤務記録の開始・終了・休憩欄へ自動入力しません。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .background(Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 17))
+            VStack(alignment: .leading, spacing: 7) {
+                Toggle("接続エラー時に自動再ログインを試みる", isOn: $autoRecovery)
+                Text("ログイン情報をKeychainに保存した場合のみ利用できます。iPhoneのロック解除中に1回試行し、勤怠の保存・申請を再送信することはありません。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .background(Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 17))
+            Label("次のログイン画面でユーザーIDとパスワードを入力します。保存する場合、iPhoneのKeychainで保護されます。",
+                  systemImage: "lock.shield")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .accessibilityIdentifier("onboarding-setup")
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text("はじめてのWebTimeCard")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(page + 1) / \(steps.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 12)
+                HStack(spacing: 7) {
+                    ForEach(0..<steps.count, id: \.self) { index in
+                        Capsule().fill(index <= page ? Color.accentColor :
+                                       Color(uiColor: .tertiarySystemFill))
+                            .frame(height: 5)
+                    }
+                }
+                .padding(.horizontal, 22).padding(.bottom, 8)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if page == 0 { intro }
+                        else if page == 1 { walkthrough }
+                        else { setup }
+                    }
+                    .padding(.horizontal, 22).padding(.vertical, 18)
+                    .frame(maxWidth: 620)
+                    .frame(maxWidth: .infinity)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                Divider()
+                HStack(spacing: 12) {
+                    if page > 0 {
+                        Button("戻る") { page -= 1 }
+                            .buttonStyle(.bordered).controlSize(.large)
+                    } else {
+                        Button("スキップ") { complete() }
+                            .buttonStyle(.bordered).controlSize(.large)
+                            .disabled(!companyValid)
+                    }
+                    Spacer(minLength: 0)
+                    Button(page == 2 ? "設定を保存してログインへ" : "次へ") {
+                        if page < 2 { page += 1 } else { complete() }
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .disabled(page == 2 && !companyValid)
+                    .accessibilityIdentifier("onboarding-next")
+                }
+                .padding(.horizontal, 22).padding(.vertical, 14)
+                .background(Color(uiColor: .secondarySystemGroupedBackground))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .onAppear {
+                companyDraft = savedCompanyID
+            }
+        }
+        .accessibilityIdentifier("native-onboarding-guide")
+    }
+}
+
 struct NativePreferencesScreen: View {
     @ObservedObject var model: NativeNavigationModel
     @AppStorage("etc-duo-v296-salary.enabled") private var showSalary = false
@@ -1348,6 +1553,7 @@ struct NativePreferencesScreen: View {
     @AppStorage("etc-duo-reminder-close.minute") private var closeMinute = 0
     @AppStorage("etc-duo-reminder-close.day") private var closeDay = 15
     @AppStorage("etc-duo-recovery.autoSignIn") private var autoRecovery = true
+    @AppStorage("etc-duo-account.companyID") private var companyID = "pasona"
     @State private var confirmDelete = false
     @State private var credentialsSaved = CredentialVault.exists()
     @State private var deletedMessage = ""
@@ -1386,6 +1592,23 @@ struct NativePreferencesScreen: View {
 
     var body: some View {
         Form {
+            Section {
+                TextField("企業ID", text: $companyID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textContentType(.organizationName)
+                    .accessibilityIdentifier("settings-company-id")
+                Button {
+                    model.showOnboarding = true
+                } label: {
+                    Label("使い方と初期設定をもう一度見る", systemImage: "book.closed")
+                }
+                if credentialsSaved {
+                    Text("保存済みのFace IDログイン情報は変更されません。新しい企業IDを使うときは、ログイン画面で再ログインしてアカウント情報を保存してください。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } header: { Text("アカウント・はじめの設定") }
+              footer: { Text("企業IDはこのiPhoneに記憶され、次回のログイン画面にも自動で表示されます。") }
             Section("外観") {
                 Picker("表示モード", selection: Binding(
                     get: { model.websiteTheme },
@@ -1480,7 +1703,7 @@ struct NativePreferencesScreen: View {
 
 struct NativeLoginScreen: View {
     @ObservedObject var model:NativeNavigationModel
-    @State private var company="pasona"
+    @AppStorage("etc-duo-account.companyID") private var company="pasona"
     @State private var user=""
     @State private var password=""
     @State private var remember=true
@@ -1492,7 +1715,13 @@ struct NativeLoginScreen: View {
                 Text("ログイン").font(.largeTitle.bold())
                 NativeSurface(title:"アカウント情報") {
                     TextField("企業ID",text:$company)
-                        .textContentType(.organizationName).textFieldStyle(.roundedBorder)
+                        .textContentType(.organizationName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("login-company-id")
+                    Text("企業IDは自動的に記憶されます。設定画面からも変更できます。")
+                        .font(.caption).foregroundStyle(.secondary)
                     TextField("ユーザーID",text:$user)
                         .textContentType(.username).textFieldStyle(.roundedBorder)
                     SecureField("パスワード",text:$password)
@@ -1503,7 +1732,8 @@ struct NativeLoginScreen: View {
                     } label: {
                         Text("ログイン").frame(maxWidth:.infinity)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
-                        .disabled(user.isEmpty || password.isEmpty)
+                        .disabled(company.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                  company.count > 128 || user.isEmpty || password.isEmpty)
                     Button {model.faceIDLogin()} label: {
                         Label("Face ID / 端末認証でログイン",systemImage:"faceid")
                     }.buttonStyle(.bordered)
