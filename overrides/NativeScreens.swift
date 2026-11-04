@@ -1738,8 +1738,15 @@ struct NativeLoginScreen: View {
                         Label("Face ID / 端末認証でログイン",systemImage:"faceid")
                     }.buttonStyle(.bordered)
                 }
-                Button("別のログイン方法") {model.showOfficial=true}
-                    .font(.caption)
+                HStack(spacing: 16) {
+                    Button {
+                        model.showOnboarding = true
+                    } label: {
+                        Label("使い方と初期設定", systemImage: "book.closed")
+                    }
+                    Button("別のログイン方法") { model.showOfficial = true }
+                }
+                .font(.caption)
             }.padding(22).frame(maxWidth:530).frame(maxWidth:.infinity)
         }
     }
