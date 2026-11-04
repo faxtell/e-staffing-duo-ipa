@@ -35,6 +35,9 @@ jobs:
           if test -f overrides/native-form-bridge.js; then
             cp overrides/native-form-bridge.js source/EStaffingTimeCard/Resources/native-form-bridge.js
           fi
+          if test -f overrides/break-autofill.js; then
+            cp overrides/break-autofill.js source/EStaffingTimeCard/Resources/break-autofill.js
+          fi
           if test -d overrides/tests; then
             cp overrides/tests/*.cjs source/tests/
           fi
@@ -56,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           for file in source/EStaffingTimeCard/Resources/*.js; do node --check "$file"; done
-      - name: Test break-time autofill
+      - name: Test opt-in break-time assistance (no automatic edits)
         shell: bash
         run: node source/tests/break-autofill.test.cjs
       - name: Test native Duo navigation
