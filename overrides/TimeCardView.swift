@@ -189,6 +189,7 @@ final class NativeNavigationModel: ObservableObject {
     @Published var nativeSubmissionMessage = ""
     @Published var nativeSubmissionInFlight = false
     @Published var nativeSettingsOpen = false
+    @Published var showOnboarding = false
     @Published var nativeLoginReady = false
     @Published var recoveryActive = false
     @Published var recoveryLoading = false
@@ -271,7 +272,15 @@ final class NativeNavigationModel: ObservableObject {
 
     func nativeLogin(_ payload: [String: Any]) {
         guard page == "login", nativeLoginReady, let view = webView,
-              view.url?.host == "m.e-staffing.ne.jp" else { return }
+              view.url?.host == "m.e-staffing.ne.jp",
+              let companyRaw = payload["company"] as? String,
+              !companyRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              companyRaw.count <= 128 else { return }
+        // The login screen uses @AppStorage for the same ID. Ensure the
+        // company field remains available for subsequent launches, without
+        // exposing or persisting passwords in UserDefaults.
+        UserDefaults.standard.set(companyRaw.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  forKey: "etc-duo-account.companyID")
         guard let bytes=try? JSONSerialization.data(withJSONObject:payload),
               let arg=String(data:bytes,encoding:.utf8) else{return}
         view.evaluateJavaScript("window.__etcNativeLogin?.(\(arg))",completionHandler:nil)
@@ -467,6 +476,27 @@ final class NativeNavigationModel: ObservableObject {
 /// Duo inner layouts, but the calendar has NO navigation and is read-only.
 struct TimeCardView: View {
     @StateObject private var navigation = NativeNavigationModel()
+    @AppStorage("etc-duo-onboarding.completed") private var onboardingCompleted = false
+    @State private var onboardingPresented = false
+
+    private func initializeOnboarding() {
+        // Migrate existing installations that already have a Keychain account
+        // without replaying first-use onboarding or overwriting their ID.
+        if UserDefaults.standard.string(forKey: "etc-duo-account.companyID") == nil,
+           let saved = CredentialVault.read() {
+            let id = saved.companyID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !id.isEmpty && id.count <= 128 {
+                UserDefaults.standard.set(id, forKey: "etc-duo-account.companyID")
+            }
+        }
+        if !onboardingCompleted {
+            if CredentialVault.exists() {
+                onboardingCompleted = true
+            } else {
+                onboardingPresented = true
+            }
+        }
+    }
 
     private var showNavigation: Bool {
         !navigation.recoveryActive && navigation.isVisible && !navigation.sheetOpen && !navigation.dashboardLoading && navigation.openingCalendarDay == nil
@@ -572,6 +602,19 @@ struct TimeCardView: View {
             }
         }
         .preferredColorScheme(navigation.preferredScheme)
+        .fullScreenCover(isPresented: $onboardingPresented) {
+            NativeFirstRunGuide {
+                onboardingCompleted = true
+                onboardingPresented = false
+            }
+        }
+        .onAppear { initializeOnboarding() }
+        .onChange(of: navigation.showOnboarding) { _, show in
+            if show {
+                navigation.showOnboarding = false
+                onboardingPresented = true
+            }
+        }
     }
 
     @ViewBuilder
@@ -1155,7 +1198,10 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                       let password = payload["password"] as? String,
                       !userID.isEmpty, !password.isEmpty,
                       userID.count <= 128, password.count <= 512 else { return }
-                let companyID = payload["companyID"] as? String ?? "pasona"
+                let fallback = UserDefaults.standard.string(forKey: "etc-duo-account.companyID") ?? "pasona"
+                let companyID = (payload["companyID"] as? String ?? fallback)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !companyID.isEmpty, companyID.count <= 128 else { return }
                 pending = TimeCardCredential(companyID: companyID, userID: userID, password: password)
             case "restore":
                 restoreAfterDeviceAuthentication()
@@ -1233,7 +1279,12 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                     self.navigation.nativeLoginReady = false
                     self.navigation.page = "home"
                     self.navigation.isVisible = true
-                    if let candidate = self.pending { _ = CredentialVault.save(candidate) }
+                    if let candidate = self.pending {
+                        if CredentialVault.save(candidate) {
+                            UserDefaults.standard.set(candidate.companyID,
+                                                      forKey: "etc-duo-account.companyID")
+                        }
+                    }
                     self.pending = nil
                     self.lastSubmissionWasAutomatic = false
                     // Respect explicit logout later in the same app session.
