@@ -1,0 +1,31 @@
+name: Verify break guidance safety
+on:
+  push:
+    branches: [main, 'fix/**']
+    paths:
+      - 'overrides/break-autofill.js'
+      - 'overrides/tests/break-autofill.test.cjs'
+      - '.github/workflows/verify-break-assistant.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: Confirm rest time stays untouched without explicit input
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          unzip -q project.zip -d source
+          cp overrides/break-autofill.js source/EStaffingTimeCard/Resources/break-autofill.js
+          cp overrides/tests/break-autofill.test.cjs source/tests/break-autofill.test.cjs
+      - name: Validate and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check source/EStaffingTimeCard/Resources/break-autofill.js
+          node source/tests/break-autofill.test.cjs
