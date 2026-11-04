@@ -44,7 +44,7 @@ function fixture({startTime='',endTime='',restTime='',readOnly=false,disabled=fa
     if(query==='input[name="rstTime"]')return rest;
     return null;
   }};
-  const head={append(){}};
+  const head={append(){},appendChild(){}};
   const document={
     querySelector:query=>query==='form[name="TMSINP01ActionForm"]'?form:null,
     createElement:tag=>{const node=new Element(tag);generated.push(node);return node;},
