@@ -56,9 +56,9 @@ for(const token of ['daily-approved-lock-banner','daily-approved-recorded-times'
   'daily-approved-tabletop-details','daily-approved-official-link',
   'if model.nativeDailyLocked'])
  assert(screen.includes(token),token);
-assert(screen.includes('if item.leave { return "年休" }'),'Leave label must override short approval state');
+assert(screen.includes('return item.stateLabel'),'Leave and approval are normalized through official status');
 assert(screen.includes('Text(row?.leave == true ? "年休"'),'List must prioritize leave before work');
 assert(screen.includes('if row?.work == true && row?.leave != true'),'Month grid must prioritize leave');
-assert(screen.includes('(row?.known == true ? row?.status ?? "" : "")'),'Approval status belongs to secondary label');
+assert(screen.includes('(row?.known == true ? row?.approvalDescription ?? "" : "")'),'Approval status belongs to secondary label');
 assert(pbx.includes('MARKETING_VERSION = 3.8;'),'Marketing version must be updated');
 console.log('v3.8 approved read-only DOM values, locked controls, and leave labeling: PASS');
