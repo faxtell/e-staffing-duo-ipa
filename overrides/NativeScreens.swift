@@ -487,6 +487,12 @@ struct NativeDailyScreen: View {
     @ObservedObject var model: NativeNavigationModel
     @State private var confirmDailyApplication = false
     @State private var tabletopDetailsExpanded = false
+    @AppStorage("etc-duo.templates.custom-v1") private var customTemplatesJSON = "[]"
+    @AppStorage("etc-duo.tips.break-v1") private var breakTipSeen = false
+    @AppStorage("etc-duo.tips.templates-v1") private var templateTipSeen = false
+    @State private var templatePreview: NativeWorkTemplate?
+    @State private var saveTemplateName = ""
+    @State private var showSaveTemplate = false
     @State private var editingTimeName: String?
     @State private var editingTimeValue = Date()
     // The forecast and the official break field share a single source of truth.
@@ -764,6 +770,20 @@ struct NativeDailyScreen: View {
                             .accessibilityIdentifier("daily-break-minutes-input")
                         Text("分").font(.caption).foregroundStyle(.secondary)
                     }
+                    if !breakTipSeen {
+                        HStack(alignment: .top, spacing: 10) {
+                            Label("休憩の目安と実際の取得時間は別です。目安を超えても休憩欄は自動入力しません。",
+                                  systemImage: "lightbulb")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            Button("了解") { breakTipSeen = true }
+                                .font(.caption.weight(.semibold))
+                        }
+                        .padding(10)
+                        .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                                    in: RoundedRectangle(cornerRadius: 11))
+                        .accessibilityIdentifier("daily-break-context-tip")
+                    }
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("休憩の目安").font(.caption2).foregroundStyle(.secondary)
@@ -797,6 +817,123 @@ struct NativeDailyScreen: View {
                         fieldEntry("深夜休憩",name:"nightRstTime")
                     }
                 }
+    }
+    private var storedTemplates: [NativeWorkTemplate] {
+        let bytes = Data(customTemplatesJSON.utf8)
+        return (try? JSONDecoder().decode([NativeWorkTemplate].self, from: bytes)) ?? []
+    }
+    private var allTemplates: [NativeWorkTemplate] {
+        NativeWorkTemplate.presets + storedTemplates
+    }
+    private var canStoreCurrentTemplate: Bool {
+        minuteOfDay(field("startTime")) != nil &&
+        minuteOfDay(field("endTime")) != nil &&
+        enteredRestMinutes != nil &&
+        !model.nativeDailyLocked
+    }
+    private func saveCurrentTemplate() {
+        let name = saveTemplateName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canStoreCurrentTemplate, !name.isEmpty, name.count <= 30,
+              let rest = enteredRestMinutes else { return }
+        var list = storedTemplates
+        guard list.count < 20 else { return }
+        list.append(.init(id: UUID().uuidString, name: name,
+                          startTime: field("startTime"), endTime: field("endTime"),
+                          breakMinutes: String(rest)))
+        if let bytes = try? JSONEncoder().encode(list),
+           let value = String(data: bytes, encoding: .utf8) {
+            customTemplatesJSON = value
+            saveTemplateName = ""
+        }
+    }
+    private func applyConfirmedTemplate(_ template: NativeWorkTemplate) {
+        guard model.nativeDailyReady, !model.nativeDailyLocked,
+              !model.navigationInProgress else { return }
+        model.nativeTemplateMessage = ""
+        model.nativeFormAction([
+            "kind": "template", "confirmed": true,
+            "values": ["startTime": template.startTime,
+                       "endTime": template.endTime,
+                       "rstTime": template.breakMinutes]
+        ])
+    }
+    private var templateCard: some View {
+        NativeSurface(title: "勤務パターン") {
+            HStack(spacing: 10) {
+                Menu {
+                    ForEach(allTemplates) { template in
+                        Button(template.name + "  " + template.summary) {
+                            templatePreview = template
+                        }
+                    }
+                } label: {
+                    Label("テンプレートから入力", systemImage: "square.stack.3d.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("daily-select-work-template")
+                Button {
+                    saveTemplateName = ""
+                    showSaveTemplate = true
+                } label: {
+                    Image(systemName: "plus.square.on.square")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!canStoreCurrentTemplate || storedTemplates.count >= 20)
+                .accessibilityLabel("現在の勤務時間をテンプレートに登録")
+            }
+            if !templateTipSeen {
+                HStack(spacing: 10) {
+                    Label("選んだだけでは入力されません。変更前に内容を確認できます。",
+                          systemImage: "lightbulb")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("了解") { templateTipSeen = true }
+                        .font(.caption.weight(.semibold))
+                }
+                .accessibilityIdentifier("daily-template-context-tip")
+            }
+            if !model.nativeTemplateMessage.isEmpty {
+                Label(model.nativeTemplateMessage, systemImage: "info.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !storedTemplates.isEmpty {
+                Text("保存したパターン：\(storedTemplates.count)件。設定からリセットできます。")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("native-work-template-card")
+    }
+    private var templatePreviewCard: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if let template = templatePreview {
+                Text(template.name)
+                    .font(.title2.bold())
+                Text("入力される内容").font(.subheadline).foregroundStyle(.secondary)
+                LabeledContent("開始", value: String(template.startTime.prefix(2)) + ":" +
+                               String(template.startTime.suffix(2)))
+                LabeledContent("終了", value: String(template.endTime.prefix(2)) + ":" +
+                               String(template.endTime.suffix(2)))
+                LabeledContent("休憩", value: template.breakMinutes + "分")
+                Divider()
+                Text("現在の入力がある場合は上書きします。選択を確定しても申請は行いません。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button {
+                    applyConfirmedTemplate(template)
+                    templatePreview = nil
+                } label: {
+                    Label("この内容を入力する", systemImage: "checkmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("daily-confirm-template")
+                Button("キャンセル") { templatePreview = nil }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(22)
+        .frame(maxWidth: 420)
+        .accessibilityIdentifier("daily-template-preview")
     }
     private var dailyDetailsCard: some View {
         NativeSurface(title:"勤務区分・就業場所") {
@@ -839,6 +976,7 @@ struct NativeDailyScreen: View {
                     Label(model.nativeSubmissionMessage, systemImage: "info.circle")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                NativeSyncStatusBanner(model: model)
         }
     }
     private var dailyWorkPane: some View {
@@ -862,6 +1000,7 @@ struct NativeDailyScreen: View {
                     lockedDailyInfo
                     dailyLockedActions
                 } else {
+                    templateCard
                     dailyDetailsCard
                     dailyActions
                 }
@@ -935,8 +1074,9 @@ struct NativeDailyScreen: View {
                 Label("勤怠を編集", systemImage: "square.and.pencil")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Text("変更は自動保存")
+                Text(model.nativeSyncStatus)
                     .font(.caption2).foregroundStyle(.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.8)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             Divider()
@@ -985,6 +1125,7 @@ struct NativeDailyScreen: View {
                         }
                         .font(.caption).buttonStyle(.bordered).controlSize(.small)
                     }
+                    templateCard
                     DisclosureGroup(isExpanded: $tabletopDetailsExpanded) {
                         VStack(alignment: .leading, spacing: 12) {
                             dailyDetailsCard
@@ -1067,22 +1208,45 @@ struct NativeDailyScreen: View {
                 }
                 .accessibilityIdentifier("daily-fold-tabletop")
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 15) {
-                        dailyHeading
-                        if model.nativeDailyLocked {
-                            dailyReadOnlyCard
-                            dailyLockedActions
-                        } else {
-                            dailyWorkCard
-                            dailyDetailsCard
-                            dailyActions
-                        }
+                if proxy.size.width >= 660 {
+                    // Fully expanded Duo: persistent side-by-side time and
+                    // details, each independently scrollable.
+                    HStack(spacing: 0) {
+                        dailyWorkPane.frame(maxWidth: .infinity)
+                        Divider()
+                        dailyEditPane.frame(maxWidth: .infinity)
                     }
-                    .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("daily-expanded-two-column")
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 15) {
+                            dailyHeading
+                            if model.nativeDailyLocked {
+                                dailyReadOnlyCard
+                                dailyLockedActions
+                            } else {
+                                dailyWorkCard
+                                templateCard
+                                dailyDetailsCard
+                                dailyActions
+                            }
+                        }
+                        .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+                    }
+                    .accessibilityIdentifier("daily-responsive-standard")
                 }
-                .accessibilityIdentifier("daily-responsive-standard")
             }
+        }
+        .sheet(item: $templatePreview) { _ in
+            templatePreviewCard
+                .presentationDetents([.medium])
+        }
+        .alert("勤務パターンを登録", isPresented: $showSaveTemplate) {
+            TextField("名前（30文字以内）", text: $saveTemplateName)
+            Button("キャンセル", role: .cancel) {}
+            Button("登録") { saveCurrentTemplate() }
+        } message: {
+            Text("現在入力されている開始・終了・休憩時間を端末に保存します。勤怠の送信は行いません。")
         }
         .alert("日々勤怠を申請しますか？", isPresented: $confirmDailyApplication) {
             Button("キャンセル", role: .cancel) {}
