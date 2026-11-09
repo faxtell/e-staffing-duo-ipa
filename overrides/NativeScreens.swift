@@ -1708,6 +1708,7 @@ struct NativeClosingScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 closingHeading
+                NativeSyncStatusBanner(model: model)
                 closeApplicationNotice
                 closingSummary(columns: 2)
                 closingRecords(month: month)
@@ -1739,6 +1740,7 @@ struct NativeClosingScreen: View {
                 }
                 closingSummary(columns: width >= 600 ? 4 : 2)
                 closeApplicationNotice
+                NativeSyncStatusBanner(model: model)
                 NativeClosingTabletopCalendar(model: model, month: month)
                     .padding(12)
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
@@ -1820,6 +1822,7 @@ struct NativeClosingScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
                         closingHeading
+                        NativeSyncStatusBanner(model: model)
                         closeApplicationNotice
                         if model.calendarMonth.count == 7 {
                             let month = ClosingMonthData(model.calendarMonth)
@@ -2072,6 +2075,9 @@ struct NativePreferencesScreen: View {
     @AppStorage("etc-duo-reminder-close.minute") private var closeMinute = 0
     @AppStorage("etc-duo-reminder-close.day") private var closeDay = 15
     @AppStorage("etc-duo-recovery.autoSignIn") private var autoRecovery = true
+    @AppStorage("etc-duo.templates.custom-v1") private var customTemplatesJSON = "[]"
+    @AppStorage("etc-duo.tips.break-v1") private var breakTipSeen = false
+    @AppStorage("etc-duo.tips.templates-v1") private var templateTipSeen = false
     @AppStorage("etc-duo-account.companyID") private var companyID = "pasona"
     @State private var confirmDelete = false
     @State private var credentialsSaved = CredentialVault.exists()
@@ -2181,7 +2187,28 @@ struct NativePreferencesScreen: View {
               footer: { Text("通知は確認のためのリマインダーです。勤務記録や申請状態を自動確認しません。") }
             Section("iPhone Duo") {
                 Toggle("日々勤怠にカレンダーを並べる", isOn: $model.sidebarEnabled)
+                Text("画面を開いたときはカレンダー・勤務入力・詳細を並べ、卓上時は上にサマリー、下に操作をまとめます。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                Button {
+                    model.nativeSettingsOpen = false
+                    model.nativeAnalysisOpen = true
+                } label: {
+                    Label("勤務分析を開く", systemImage: "chart.bar.xaxis")
+                }
+                Button {
+                    breakTipSeen = false
+                    templateTipSeen = false
+                } label: {
+                    Label("操作ヒントをもう一度見る", systemImage: "lightbulb")
+                }
+                Button("自分で登録した勤務パターンを消去", role: .destructive) {
+                    customTemplatesJSON = "[]"
+                }
+                .disabled(customTemplatesJSON == "[]")
+            } header: { Text("便利な機能") }
+              footer: { Text("勤務テンプレートはこのiPhoneのみに保存します。消去しても公式の勤怠記録は変わりません。") }
             Section {
                 Toggle("エラー時にFace IDなしで再ログイン", isOn: $autoRecovery)
                     .disabled(!credentialsSaved)
