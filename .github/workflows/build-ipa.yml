@@ -135,6 +135,9 @@ jobs:
       - name: Test native productivity refresh v3.14 (excluding pre-apply checker)
         shell: bash
         run: cd source && node tests/productivity-v314.test.cjs
+      - name: Test clean navigation hierarchy and unique actions (v3.15)
+        shell: bash
+        run: cd source && node tests/navigation-dedup-v315.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh
