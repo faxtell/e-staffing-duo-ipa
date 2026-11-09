@@ -289,8 +289,13 @@ struct NativeHomeScreen: View {
                     HStack(alignment: .center) {
                         Label(todayStatus,
                               systemImage: todayRecord?.stateSymbol ?? "calendar.badge.clock")
-                            .font(.headline)
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(todayRecord?.stateTint ?? Color.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background((todayRecord?.stateTint ?? Color.gray).opacity(0.10),
+                                        in: Capsule())
+                            .accessibilityIdentifier("home-today-state")
                         Spacer(minLength: 0)
                     }
                     if let rec = todayRecord, rec.known, !rec.hours.isEmpty {
