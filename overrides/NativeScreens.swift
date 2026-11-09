@@ -903,6 +903,15 @@ struct NativeDailyScreen: View {
             }
         }
         .accessibilityIdentifier("native-work-template-card")
+        .alert("勤務パターンを登録", isPresented: $showSaveTemplate) {
+            TextField("名前（30文字以内）", text: $saveTemplateName)
+            Button("キャンセル", role: .cancel) {}
+            Button("登録") { saveCurrentTemplate() }
+                .disabled(saveTemplateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                          saveTemplateName.count > 30)
+        } message: {
+            Text("現在入力されている開始・終了・休憩時間を端末に保存します。勤怠の送信は行いません。")
+        }
     }
     private var templatePreviewCard: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1240,13 +1249,6 @@ struct NativeDailyScreen: View {
         .sheet(item: $templatePreview) { _ in
             templatePreviewCard
                 .presentationDetents([.medium])
-        }
-        .alert("勤務パターンを登録", isPresented: $showSaveTemplate) {
-            TextField("名前（30文字以内）", text: $saveTemplateName)
-            Button("キャンセル", role: .cancel) {}
-            Button("登録") { saveCurrentTemplate() }
-        } message: {
-            Text("現在入力されている開始・終了・休憩時間を端末に保存します。勤怠の送信は行いません。")
         }
         .alert("日々勤怠を申請しますか？", isPresented: $confirmDailyApplication) {
             Button("キャンセル", role: .cancel) {}
