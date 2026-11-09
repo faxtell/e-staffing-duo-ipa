@@ -90,7 +90,7 @@ for(const key of [
  'var nativeSyncStatus: String','lastOfficialDailyAt = Date()',
  'lastOfficialDashboardAt = Date()','lastOfficialCalendarAt = Date()',
  'if page == "daily"','"保存結果は未確認"',
- 'case "templateResult":','func navigate(_ destination: String)'
+ 'action == "templateResult"','func navigate(_ destination: String)'
 ])assert(swift.includes(key),'Missing state/sync logic: '+key);
 assert(!swift.includes('if status == "済" { return "承認済" }'),
  'Generic short completed state is not approval');
