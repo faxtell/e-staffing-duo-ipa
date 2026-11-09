@@ -91,6 +91,7 @@ struct NativeCalendarRecord: Identifiable {
 struct NativeCalendarSidebar: View {
     @ObservedObject var model: NativeNavigationModel
     @State private var selected: String = ""
+    @State private var previewDate: String?
     private let weekdays = ["日", "月", "火", "水", "木", "金", "土"]
 
     var body: some View {
@@ -130,6 +131,13 @@ struct NativeCalendarSidebar: View {
                 }
             }
             .accessibilityIdentifier("sidebar-full-month-calendar")
+            HStack(spacing: 10) {
+                Label("出勤", systemImage: "clock.fill").foregroundStyle(.teal)
+                Label("年休", systemImage: "sun.max.fill").foregroundStyle(.purple)
+                Label("承認", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+            }
+            .font(.system(size: 9))
+            .accessibilityIdentifier("sidebar-attendance-legend")
             Divider()
             let current = model.calendarRows[selected]
             VStack(alignment: .leading, spacing: 6) {
@@ -137,13 +145,18 @@ struct NativeCalendarSidebar: View {
                     .font(.subheadline.weight(.semibold))
                 if let item = current {
                     if !item.known { Text(item.holiday.isEmpty ? "この日付は未取得" : item.holiday).foregroundStyle(.secondary) }
-                    else if item.work {
-                        Text(item.hours.isEmpty ? "勤務記録あり" : item.hours).font(.callout.weight(.medium))
+                    else if item.leave {
+                        Label("年次有給休暇", systemImage: item.stateSymbol)
+                            .foregroundStyle(item.stateTint)
+                    } else if item.work {
+                        Label(item.hours.isEmpty ? item.stateLabel : item.hours,
+                              systemImage: item.stateSymbol)
+                            .foregroundStyle(item.stateTint)
                         Text(([item.place,item.rest.isEmpty ? "" : "休憩 \(item.rest)分"].filter { !$0.isEmpty }).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                     } else {
-                        Text(item.leave ? "年次有給休暇" : item.holiday.isEmpty ? "記録なし" : item.holiday).foregroundStyle(.secondary)
+                        Text(item.stateLabel).foregroundStyle(.secondary)
                     }
-                    if !item.status.isEmpty { Text(item.status).font(.caption).foregroundStyle(.secondary) }
+                    if !item.approvalDescription.isEmpty { Text(item.approvalDescription).font(.caption).foregroundStyle(.secondary) }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -155,6 +168,14 @@ struct NativeCalendarSidebar: View {
         .padding(12)
         .background(Color(uiColor: .secondarySystemGroupedBackground))
         .accessibilityIdentifier("read-only-calendar-sidebar")
+        .sheet(isPresented: Binding(
+            get: { previewDate != nil },
+            set: { if !$0 { previewDate = nil } }
+        )) {
+            NativeCalendarDayPreview(date: previewDate ?? "",
+                                     record: model.calendarRows[previewDate ?? ""])
+                .presentationDetents([.medium])
+        }
     }
     // Explicit, stable week/column slots render every day 1...month end.
     private var weekCount: Int {
@@ -170,10 +191,10 @@ struct NativeCalendarSidebar: View {
         } label: {
             VStack(spacing: 2) {
                 Text("\(day)").font(.system(size: 12, weight: .semibold))
-                Circle()
-                    .fill(record?.leave == true ? Color.purple :
-                          record?.work == true ? Color.green : Color.clear)
-                    .frame(width: 4, height: 4)
+                Image(systemName: record?.stateSymbol ?? "questionmark.circle")
+                    .font(.system(size: 9))
+                    .foregroundStyle(record?.stateTint ?? .gray)
+                    .frame(height: 11)
             }
             .frame(maxWidth: .infinity, minHeight: 32)
             .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
@@ -182,15 +203,12 @@ struct NativeCalendarSidebar: View {
                         in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .onLongPressGesture(minimumDuration: 0.55) { previewDate = key }
         .accessibilityLabel("\(day)日、\(label(for: record))")
+        .accessibilityHint("長押しすると公式の取得済み内容をプレビューします")
     }
     private func label(for record: NativeCalendarRecord?) -> String {
-        guard let record = record else { return "未取得" }
-        if !record.holiday.isEmpty { return record.holiday }
-        if !record.known { return "未取得" }
-        if record.work { return "勤務記録あり" }
-        if record.leave { return "年次有給休暇" }
-        return "記録なし"
+        record?.stateLabel ?? "未取得"
     }
     private var monthTitle: String {
         let parts=model.calendarMonth.split(separator: "-")
