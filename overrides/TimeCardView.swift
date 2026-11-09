@@ -1430,6 +1430,11 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                     self.navigation.page = "login"
                     self.navigation.isVisible = false
                     self.navigation.summary = [:]
+                    self.navigation.lastOfficialDashboardAt = nil
+                    self.navigation.lastOfficialDailyAt = nil
+                    self.navigation.nativeDailyReady = false
+                    self.navigation.nativeSaveState = "idle"
+                    self.navigation.nativeTemplateMessage = ""
                     self.navigation.resetCalendar()
                     self.dashboardRefreshInFlight = false
                     self.dashboardFirst = nil
