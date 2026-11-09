@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import Charts
 
 // Native front-end.  The single official WKWebView remains mounted behind it;
 // the bridge sends only explicitly allowed UI field values and choice indices.
@@ -9,6 +10,8 @@ struct NativeApplicationScreen: View {
         Group {
             if model.nativeSettingsOpen {
                 NativePreferencesScreen(model:model)
+            } else if model.nativeAnalysisOpen {
+                NativeAnalyticsScreen(model:model)
             } else {
                 switch model.page {
                 case "login": NativeLoginScreen(model:model)
@@ -111,6 +114,111 @@ private struct NativeSurface<Content: View>: View {
     }
 }
 
+// A single official-state vocabulary is reused on the home, calendar,
+// analytics and the date preview. Unfetched periods never become zeroes.
+private struct NativeSyncStatusBanner: View {
+    @ObservedObject var model: NativeNavigationModel
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: model.nativeSaveState == "error" ? "exclamationmark.triangle.fill" :
+                  model.navigationInProgress ? "arrow.triangle.2.circlepath" : "checkmark.shield")
+                .foregroundStyle(model.nativeSaveState == "error" ? Color.orange : Color.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.nativeSyncStatus).font(.caption.weight(.semibold))
+                if let date = model.page == "daily" ? model.lastOfficialDailyAt :
+                              model.page == "home" ? model.lastOfficialDashboardAt :
+                              model.lastOfficialCalendarAt {
+                    Text("公式画面から最終取得：" +
+                         date.formatted(date: .omitted, time: .shortened))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 13))
+        .accessibilityIdentifier("native-sync-status")
+    }
+}
+
+struct NativeCalendarDayPreview: View {
+    let date: String
+    let record: NativeCalendarRecord?
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 11) {
+                        Image(systemName: record?.stateSymbol ?? "questionmark.circle")
+                            .font(.title2).foregroundStyle(record?.stateTint ?? .secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(record?.stateLabel ?? "未取得")
+                                .font(.title3.bold())
+                            Text(date).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    if let record, record.known {
+                        if !record.hours.isEmpty {
+                            LabeledContent("勤務時間", value: record.hours)
+                        }
+                        if !record.rest.isEmpty {
+                            LabeledContent("休憩", value: record.rest + "分")
+                        }
+                        if !record.place.isEmpty {
+                            LabeledContent("就業場所", value: record.place)
+                        }
+                        if !record.approvalDescription.isEmpty {
+                            LabeledContent("申請状態", value: record.approvalDescription)
+                        }
+                        if !record.holiday.isEmpty {
+                            LabeledContent("休日情報", value: record.holiday)
+                        }
+                    } else {
+                        Label("この日付の公式データはまだ取得されていません。",
+                              systemImage: "info.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("表示内容は公式画面から取得できた情報のみです。長押ししても申請や保存は行いません。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(20)
+            }
+            .navigationTitle("勤務記録のプレビュー")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") { dismiss() }
+                }
+            }
+        }
+        .accessibilityIdentifier("native-calendar-day-preview")
+    }
+}
+
+private struct NativeWorkTemplate: Codable, Identifiable, Equatable {
+    var id: String
+    var name: String
+    var startTime: String
+    var endTime: String
+    var breakMinutes: String
+
+    static let presets: [NativeWorkTemplate] = [
+        .init(id: "default", name: "通常勤務", startTime: "0900", endTime: "1730", breakMinutes: "60"),
+        .init(id: "late", name: "遅番", startTime: "1100", endTime: "1930", breakMinutes: "60"),
+        .init(id: "short", name: "時短勤務", startTime: "0900", endTime: "1500", breakMinutes: "0")
+    ]
+    private func time(_ raw: String) -> String {
+        guard raw.count == 4 else { return raw }
+        return String(raw.prefix(2)) + ":" + String(raw.suffix(2))
+    }
+    var summary: String {
+        time(startTime) + "〜" + time(endTime) + " · 休憩" + breakMinutes + "分"
+    }
+}
+
 struct NativeHomeScreen: View {
     @ObservedObject var model: NativeNavigationModel
     @AppStorage("etc-duo-v296-salary.enabled") private var salaryEnabled = false
@@ -118,64 +226,260 @@ struct NativeHomeScreen: View {
     @AppStorage("etc-duo-v296-salary.premium") private var premium = true
     @State private var salaryHidden = false
 
-    private var salaryValid: Bool {
-        guard let worked=model.summary["worked"] as? Int,
-              let valid=model.summary["valid"] as? Int else{return false}
-        return valid == worked && model.summary["minutes"] is Int && model.summary["overtimeMinutes"] is Int
+    private var salaryValid: Bool { model.hasCompleteMonth }
+    private var payroll: (Int, Int, Int) {
+        let mins = model.summary["minutes"] as? Int ?? 0
+        let overtime = model.summary["overtimeMinutes"] as? Int ?? 0
+        let hourly = Double(rate)
+        let base = Double(mins) * hourly / 60
+        let uplift = premium ? Double(overtime) * hourly / 60 * 0.25 : 0
+        return (Int((base + uplift).rounded()),
+                Int((Double(overtime) * hourly / 60 + uplift).rounded()),
+                Int(uplift.rounded()))
     }
-    private var payroll: (Int,Int,Int) {
-        let mins=model.summary["minutes"] as? Int ?? 0
-        let overtime=model.summary["overtimeMinutes"] as? Int ?? 0
-        let hourly=Double(rate)
-        let base=Double(mins)*hourly/60.0
-        let uplift=premium ? Double(overtime)*hourly/60.0*0.25 : 0
-        let overtimePay=Double(overtime)*hourly/60.0+uplift
-        return (Int((base+uplift).rounded()),Int(overtimePay.rounded()),Int(uplift.rounded()))
+    private func currency(_ amount: Int) -> String {
+        amount.formatted(.currency(code: "JPY").precision(.fractionLength(0)))
     }
-    private func currency(_ amount:Int)->String {amount.formatted(.currency(code:"JPY").precision(.fractionLength(0)))}
-    private func readable(_ number:Int)->String { salaryHidden ? "•••••" : currency(number) }
-    private func minutes(_ number:Int)->String {"\(number/60)時間\(String(format:"%02d",number%60))分"}
+    private func readable(_ number: Int) -> String {
+        salaryHidden ? "•••••" : currency(number)
+    }
+    private func minutes(_ number: Int) -> String {
+        "\(number / 60)時間" + String(format: "%02d", number % 60) + "分"
+    }
+    private var greeting: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        return hour < 11 ? "おはようございます。" :
+               hour < 18 ? "こんにちは。" : "おつかれさまです。"
+    }
+    private var todayKey: String {
+        Date().formatted(.iso8601.year().month().day().dateSeparator(.dash))
+    }
+    private var todayRecord: NativeCalendarRecord? { model.calendarRows[todayKey] }
+    private var todayStatus: String {
+        if let record = todayRecord, record.known { return record.stateLabel }
+        return model.todayConfirmedState
+    }
+    private var knownCoverage: Bool { model.summary["coverage"] as? String == "month" }
+    private var pendingCount: Int? { model.summary["pending"] as? Int }
+    private var unsentCount: Int? { model.summary["unsent"] as? Int }
+    private func metric(_ title: String, value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: icon)
+                .font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(.title3, design: .rounded, weight: .semibold))
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+        }
+        .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+        .padding(13)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 15))
+    }
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:16) {
-                Text("ホーム").font(.largeTitle.bold())
-                if let start=model.summary["start"] as? String,let end=model.summary["end"] as? String {
-                    Text("\(start) 〜 \(end)").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 15) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("WebTimeCard").font(.caption.weight(.semibold)).foregroundStyle(.tint)
+                    Text(greeting)
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                    Text(Date.now.formatted(date: .complete, time: .omitted))
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-                NativeSurface(title:"勤務ダッシュボード") {
-                    LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:16) {
-                        metric("勤務日数",value:(model.summary["worked"] as? Int).map{"\($0)日"} ?? "—",icon:"calendar")
-                        metric("記録なし",value:(model.summary["empty"] as? Int).map{"\($0)日"} ?? "—",icon:"calendar.badge.exclamationmark")
-                        metric("実労働",value:salaryValid ? minutes(model.summary["minutes"] as? Int ?? 0) : "—",icon:"clock")
-                        metric("残業",value:salaryValid ? minutes(model.summary["overtimeMinutes"] as? Int ?? 0) : "—",icon:"moon.stars")
+                .padding(.bottom, 2)
+                NativeSurface(title: "今日の勤怠") {
+                    HStack(alignment: .center) {
+                        Label(todayStatus,
+                              systemImage: todayRecord?.stateSymbol ?? "calendar.badge.clock")
+                            .font(.headline)
+                            .foregroundStyle(todayRecord?.stateTint ?? Color.primary)
+                        Spacer()
+                        Text("公式データに基づく表示")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if let rec = todayRecord, rec.known, !rec.hours.isEmpty {
+                        Text(rec.hours)
+                            .font(.system(.title, design: .rounded, weight: .semibold))
+                            .monospacedDigit()
+                    } else {
+                        Text("開始 --:--   終了 --:--")
+                            .font(.system(.title3, design: .rounded, weight: .medium))
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Button { model.navigate("daily") } label: {
+                        Label("日々勤怠を開く", systemImage: "square.and.pencil")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .accessibilityIdentifier("home-open-daily")
+                    if todayRecord == nil && model.todayConfirmedState == "未確認" {
+                        Text("今日の記録は未確認です。未入力と断定しません。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                HStack(spacing: 9) {
+                    metric("出勤日数", value: (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—",
+                           icon: "calendar.badge.checkmark")
+                    metric("未送信", value: unsentCount.map { "\($0)件" } ?? "未確認",
+                           icon: "tray.full")
+                }
+                HStack(spacing: 9) {
+                    metric("申請確認中", value: pendingCount.map { "\($0)件" } ?? "未確認",
+                           icon: "clock.badge.checkmark")
+                    metric("実働", value: salaryValid ?
+                           minutes(model.summary["minutes"] as? Int ?? 0) : "—",
+                           icon: "clock")
+                }
+                if !knownCoverage {
+                    Label("集計は一部期間のみです。未取得の日を0日・0時間として扱いません。",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                NativeSurface(title: "クイックアクセス") {
+                    HStack(spacing: 10) {
+                        Button { model.navigate("close") } label: {
+                            Label("締め申請", systemImage: "checkmark.rectangle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        Button { model.nativeAnalysisOpen = true } label: {
+                            Label("勤務分析", systemImage: "chart.bar.xaxis")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("home-open-analytics")
+                    }
+                }
+                NativeSyncStatusBanner(model: model)
                 if salaryEnabled && rate > 0 {
-                    NativeSurface(title:"給与目安") {
-                        HStack(alignment:.firstTextBaseline) {
-                            VStack(alignment:.leading,spacing:6) {
-                                Text(salaryValid ? readable(payroll.0) : "—").font(.system(.title,design:.rounded,weight:.bold))
-                                Text("給与の概算").font(.caption).foregroundStyle(.secondary)
+                    NativeSurface(title: "給与目安") {
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(salaryValid ? readable(payroll.0) : "—")
+                                    .font(.system(.title, design: .rounded, weight: .bold))
+                                Text("給与の概算・公式の確定額ではありません")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Button { salaryHidden.toggle() } label: {
-                                Image(systemName:salaryHidden ? "eye.slash" : "eye").font(.title3)
-                            }.accessibilityLabel(salaryHidden ? "金額を表示" : "金額を隠す")
+                                Image(systemName: salaryHidden ? "eye.slash" : "eye")
+                            }
+                            .accessibilityLabel(salaryHidden ? "金額を表示" : "金額を隠す")
                         }
                         Divider()
-                        HStack {Text("残業代");Spacer();Text(salaryValid ? readable(payroll.1) : "—").bold()}
-                        HStack {Text("うち割増分");Spacer();Text(salaryValid ? readable(payroll.2) : "—").bold()}
+                        HStack {
+                            Text("残業代"); Spacer()
+                            Text(salaryValid ? readable(payroll.1) : "—").bold()
+                        }
+                        HStack {
+                            Text("うち割増分"); Spacer()
+                            Text(salaryValid ? readable(payroll.2) : "—").bold()
+                        }
                     }
                 }
-            }.padding(16).frame(maxWidth:750)
-                .frame(maxWidth:.infinity)
+            }
+            .padding(16)
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
         }
+        .accessibilityIdentifier("native-home-priority-dashboard")
     }
-    private func metric(_ title:String,value:String,icon:String)->some View {
-        VStack(alignment:.leading,spacing:8) {
-            Label(title,systemImage:icon).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.system(.title3,design:.rounded,weight:.semibold)).minimumScaleFactor(0.75).lineLimit(1)
-        }.frame(maxWidth:.infinity,alignment:.leading)
+}
+
+private struct NativeAnalysisDatum: Identifiable {
+    let name: String
+    let count: Int
+    var id: String { name }
+}
+
+struct NativeAnalyticsScreen: View {
+    @ObservedObject var model: NativeNavigationModel
+    private var fullMonth: Bool { model.summary["coverage"] as? String == "month" }
+    private var completeHours: Bool { model.hasCompleteMonth }
+    private var filteredRows: [NativeCalendarRecord] {
+        model.calendarRows.values
+            .filter { $0.date.hasPrefix(model.calendarMonth + "-") }
+    }
+    private var knownRows: [NativeCalendarRecord] { filteredRows.filter(\.known) }
+    private var chartRows: [NativeAnalysisDatum] {
+        let rows = knownRows
+        return [
+            .init(name: "出勤", count: rows.filter { $0.work && !$0.leave }.count),
+            .init(name: "年休", count: rows.filter(\.leave).count),
+            .init(name: "その他", count: rows.filter { !$0.work && !$0.leave }.count)
+        ]
+    }
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(.title2, design: .rounded, weight: .semibold))
+                .monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 14))
+    }
+    private func time(_ key: String) -> String {
+        guard completeHours, let value = model.summary[key] as? Int else { return "—" }
+        return "\(value / 60)時間\(String(format: "%02d", value % 60))分"
+    }
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("勤務分析")
+                            .font(.largeTitle.bold())
+                        Text(fullMonth ? "月間集計" : "取得済み期間の集計")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { model.navigate("home") } label: {
+                        Label("ホーム", systemImage: "house")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                NativeSurface(title: "公式データの集計") {
+                    HStack(spacing: 10) {
+                        metric("出勤", (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—")
+                        metric("有休", knownRows.isEmpty ? "—" :
+                               "\(knownRows.filter(\.leave).count)日")
+                    }
+                    HStack(spacing: 10) {
+                        metric("実働時間", time("minutes"))
+                        metric("残業時間", time("overtimeMinutes"))
+                    }
+                    if !completeHours {
+                        Label("勤務時間は、全期間と全勤務記録の取得・検証が完了した場合のみ表示します。",
+                              systemImage: "info.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                NativeSurface(title: "取得した勤務記録の内訳") {
+                    if knownRows.isEmpty {
+                        ContentUnavailableView("記録をまだ取得していません",
+                            systemImage: "chart.bar.xaxis",
+                            description: Text("締め申請画面で公式の勤務記録を読み込むと表示できます。"))
+                    } else {
+                        Chart(chartRows) { datum in
+                            BarMark(
+                                x: .value("種類", datum.name),
+                                y: .value("日数", datum.count)
+                            )
+                            .foregroundStyle(by: .value("種類", datum.name))
+                        }
+                        .frame(height: 195)
+                        .accessibilityIdentifier("analytics-official-status-chart")
+                        Text("取得済み \(knownRows.count)日・未取得 \(filteredRows.filter { !$0.known }.count)日")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                NativeSyncStatusBanner(model: model)
+                Text("この分析はe-staffingの公式画面から取得できた範囲の参考表示です。給与や申請の確定記録とは異なります。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(16).frame(maxWidth: 760).frame(maxWidth: .infinity)
+        }
+        .accessibilityIdentifier("native-monthly-analytics")
     }
 }
 
@@ -183,6 +487,12 @@ struct NativeDailyScreen: View {
     @ObservedObject var model: NativeNavigationModel
     @State private var confirmDailyApplication = false
     @State private var tabletopDetailsExpanded = false
+    @AppStorage("etc-duo.templates.custom-v1") private var customTemplatesJSON = "[]"
+    @AppStorage("etc-duo.tips.break-v1") private var breakTipSeen = false
+    @AppStorage("etc-duo.tips.templates-v1") private var templateTipSeen = false
+    @State private var templatePreview: NativeWorkTemplate?
+    @State private var saveTemplateName = ""
+    @State private var showSaveTemplate = false
     @State private var editingTimeName: String?
     @State private var editingTimeValue = Date()
     // The forecast and the official break field share a single source of truth.
@@ -460,6 +770,20 @@ struct NativeDailyScreen: View {
                             .accessibilityIdentifier("daily-break-minutes-input")
                         Text("分").font(.caption).foregroundStyle(.secondary)
                     }
+                    if !breakTipSeen {
+                        HStack(alignment: .top, spacing: 10) {
+                            Label("休憩の目安と実際の取得時間は別です。目安を超えても休憩欄は自動入力しません。",
+                                  systemImage: "lightbulb")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            Button("了解") { breakTipSeen = true }
+                                .font(.caption.weight(.semibold))
+                        }
+                        .padding(10)
+                        .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                                    in: RoundedRectangle(cornerRadius: 11))
+                        .accessibilityIdentifier("daily-break-context-tip")
+                    }
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("休憩の目安").font(.caption2).foregroundStyle(.secondary)
@@ -493,6 +817,132 @@ struct NativeDailyScreen: View {
                         fieldEntry("深夜休憩",name:"nightRstTime")
                     }
                 }
+    }
+    private var storedTemplates: [NativeWorkTemplate] {
+        let bytes = Data(customTemplatesJSON.utf8)
+        return (try? JSONDecoder().decode([NativeWorkTemplate].self, from: bytes)) ?? []
+    }
+    private var allTemplates: [NativeWorkTemplate] {
+        NativeWorkTemplate.presets + storedTemplates
+    }
+    private var canStoreCurrentTemplate: Bool {
+        minuteOfDay(field("startTime")) != nil &&
+        minuteOfDay(field("endTime")) != nil &&
+        enteredRestMinutes != nil &&
+        !model.nativeDailyLocked
+    }
+    private func saveCurrentTemplate() {
+        let name = saveTemplateName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canStoreCurrentTemplate, !name.isEmpty, name.count <= 30,
+              let rest = enteredRestMinutes else { return }
+        var list = storedTemplates
+        guard list.count < 20 else { return }
+        list.append(.init(id: UUID().uuidString, name: name,
+                          startTime: field("startTime"), endTime: field("endTime"),
+                          breakMinutes: String(rest)))
+        if let bytes = try? JSONEncoder().encode(list),
+           let value = String(data: bytes, encoding: .utf8) {
+            customTemplatesJSON = value
+            saveTemplateName = ""
+        }
+    }
+    private func applyConfirmedTemplate(_ template: NativeWorkTemplate) {
+        guard model.nativeDailyReady, !model.nativeDailyLocked,
+              !model.navigationInProgress else { return }
+        model.nativeTemplateMessage = ""
+        model.nativeFormAction([
+            "kind": "template", "confirmed": true,
+            "values": ["startTime": template.startTime,
+                       "endTime": template.endTime,
+                       "rstTime": template.breakMinutes]
+        ])
+    }
+    private var templateCard: some View {
+        NativeSurface(title: "勤務パターン") {
+            HStack(spacing: 10) {
+                Menu {
+                    ForEach(allTemplates) { template in
+                        Button(template.name + "  " + template.summary) {
+                            templatePreview = template
+                        }
+                    }
+                } label: {
+                    Label("テンプレートから入力", systemImage: "square.stack.3d.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("daily-select-work-template")
+                Button {
+                    saveTemplateName = ""
+                    showSaveTemplate = true
+                } label: {
+                    Image(systemName: "plus.square.on.square")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!canStoreCurrentTemplate || storedTemplates.count >= 20)
+                .accessibilityLabel("現在の勤務時間をテンプレートに登録")
+            }
+            if !templateTipSeen {
+                HStack(spacing: 10) {
+                    Label("選んだだけでは入力されません。変更前に内容を確認できます。",
+                          systemImage: "lightbulb")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("了解") { templateTipSeen = true }
+                        .font(.caption.weight(.semibold))
+                }
+                .accessibilityIdentifier("daily-template-context-tip")
+            }
+            if !model.nativeTemplateMessage.isEmpty {
+                Label(model.nativeTemplateMessage, systemImage: "info.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !storedTemplates.isEmpty {
+                Text("保存したパターン：\(storedTemplates.count)件。設定からリセットできます。")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("native-work-template-card")
+        .alert("勤務パターンを登録", isPresented: $showSaveTemplate) {
+            TextField("名前（30文字以内）", text: $saveTemplateName)
+            Button("キャンセル", role: .cancel) {}
+            Button("登録") { saveCurrentTemplate() }
+                .disabled(saveTemplateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                          saveTemplateName.count > 30)
+        } message: {
+            Text("現在入力されている開始・終了・休憩時間を端末に保存します。勤怠の送信は行いません。")
+        }
+    }
+    private var templatePreviewCard: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if let template = templatePreview {
+                Text(template.name)
+                    .font(.title2.bold())
+                Text("入力される内容").font(.subheadline).foregroundStyle(.secondary)
+                LabeledContent("開始", value: String(template.startTime.prefix(2)) + ":" +
+                               String(template.startTime.suffix(2)))
+                LabeledContent("終了", value: String(template.endTime.prefix(2)) + ":" +
+                               String(template.endTime.suffix(2)))
+                LabeledContent("休憩", value: template.breakMinutes + "分")
+                Divider()
+                Text("現在の入力がある場合は上書きします。選択を確定しても申請は行いません。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button {
+                    applyConfirmedTemplate(template)
+                    templatePreview = nil
+                } label: {
+                    Label("この内容を入力する", systemImage: "checkmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("daily-confirm-template")
+                Button("キャンセル") { templatePreview = nil }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(22)
+        .frame(maxWidth: 420)
+        .accessibilityIdentifier("daily-template-preview")
     }
     private var dailyDetailsCard: some View {
         NativeSurface(title:"勤務区分・就業場所") {
@@ -535,6 +985,7 @@ struct NativeDailyScreen: View {
                     Label(model.nativeSubmissionMessage, systemImage: "info.circle")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                NativeSyncStatusBanner(model: model)
         }
     }
     private var dailyWorkPane: some View {
@@ -558,6 +1009,7 @@ struct NativeDailyScreen: View {
                     lockedDailyInfo
                     dailyLockedActions
                 } else {
+                    templateCard
                     dailyDetailsCard
                     dailyActions
                 }
@@ -631,8 +1083,9 @@ struct NativeDailyScreen: View {
                 Label("勤怠を編集", systemImage: "square.and.pencil")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Text("変更は自動保存")
+                Text(model.nativeSyncStatus)
                     .font(.caption2).foregroundStyle(.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.8)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             Divider()
@@ -681,6 +1134,7 @@ struct NativeDailyScreen: View {
                         }
                         .font(.caption).buttonStyle(.bordered).controlSize(.small)
                     }
+                    templateCard
                     DisclosureGroup(isExpanded: $tabletopDetailsExpanded) {
                         VStack(alignment: .leading, spacing: 12) {
                             dailyDetailsCard
@@ -763,22 +1217,38 @@ struct NativeDailyScreen: View {
                 }
                 .accessibilityIdentifier("daily-fold-tabletop")
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 15) {
-                        dailyHeading
-                        if model.nativeDailyLocked {
-                            dailyReadOnlyCard
-                            dailyLockedActions
-                        } else {
-                            dailyWorkCard
-                            dailyDetailsCard
-                            dailyActions
-                        }
+                if proxy.size.width >= 660 {
+                    // Fully expanded Duo: persistent side-by-side time and
+                    // details, each independently scrollable.
+                    HStack(spacing: 0) {
+                        dailyWorkPane.frame(maxWidth: .infinity)
+                        Divider()
+                        dailyEditPane.frame(maxWidth: .infinity)
                     }
-                    .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("daily-expanded-two-column")
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 15) {
+                            dailyHeading
+                            if model.nativeDailyLocked {
+                                dailyReadOnlyCard
+                                dailyLockedActions
+                            } else {
+                                dailyWorkCard
+                                templateCard
+                                dailyDetailsCard
+                                dailyActions
+                            }
+                        }
+                        .padding(16).frame(maxWidth: 750).frame(maxWidth: .infinity)
+                    }
+                    .accessibilityIdentifier("daily-responsive-standard")
                 }
-                .accessibilityIdentifier("daily-responsive-standard")
             }
+        }
+        .sheet(item: $templatePreview) { _ in
+            templatePreviewCard
+                .presentationDetents([.medium])
         }
         .alert("日々勤怠を申請しますか？", isPresented: $confirmDailyApplication) {
             Button("キャンセル", role: .cancel) {}
@@ -894,20 +1364,17 @@ struct ClosingMonthData {
 private func closingStatus(_ record: NativeCalendarRecord?) -> String {
     guard let item=record else { return "未取得" }
     if !item.known { return "未取得" }
-    if item.leave { return "年休" } // Leave type must not be replaced by approval status ("済").
-    if item.work { return item.status.isEmpty ? "勤務記録あり" : item.status }
-    return item.holiday.isEmpty ? "記録なし" : item.holiday
+    return item.stateLabel
 }
 
 private func closingColor(_ record: NativeCalendarRecord?) -> Color {
     guard let r=record, r.known else { return Color(uiColor:.tertiarySystemGroupedBackground) }
-    if r.leave { return Color.purple.opacity(0.13) }
-    if r.work { return Color.green.opacity(0.12) }
-    return Color(uiColor:.secondarySystemGroupedBackground)
+    return r.stateTint.opacity(0.10)
 }
 
 struct NativeClosingList: View {
     @ObservedObject var model: NativeNavigationModel
+    @State private var previewDate: String?
     let month: ClosingMonthData
     private let weekdayNames=["日","月","火","水","木","金","土"]
     var body: some View {
@@ -923,15 +1390,15 @@ struct NativeClosingList: View {
                             Text(weekdayNames[w]).font(.caption2)
                                 .foregroundStyle(w == 0 ? .red : w == 6 ? .blue : .secondary)
                         }.frame(width:39)
-                        RoundedRectangle(cornerRadius:2)
-                            .fill(row?.leave == true ? Color.purple : row?.work == true ? .green : .clear)
-                            .frame(width:3)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(row?.stateTint ?? .gray)
+                            .frame(width: 3)
                         VStack(alignment:.leading,spacing:5) {
                             Text(row?.leave == true ? "年休" : row?.work == true && !(row?.hours.isEmpty ?? true) ? row!.hours : closingStatus(row))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary).lineLimit(2)
                             let detail=[row?.place ?? "",(row?.rest.isEmpty == false ? "休憩 \(row!.rest)" : ""),
-                                        (row?.known == true ? row?.status ?? "" : "")]
+                                        (row?.known == true ? row?.approvalDescription ?? "" : "")]
                                 .filter{ !$0.isEmpty }.joined(separator:" · ")
                             if !detail.isEmpty {
                                 Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -946,16 +1413,28 @@ struct NativeClosingList: View {
                     .padding(.horizontal,12).padding(.vertical,12)
                     .frame(maxWidth:.infinity,alignment:.leading)
                     .background(closingColor(row),in:RoundedRectangle(cornerRadius:14))
-                }.buttonStyle(.plain)
+                }
+                .buttonStyle(.plain)
+                .onLongPressGesture(minimumDuration: 0.55) { previewDate = key }
                 .accessibilityLabel("\(day)日 \(closingStatus(row)) \(row?.hours ?? "")")
+                .accessibilityHint("長押しで勤務記録をプレビュー")
             }
         }
         .accessibilityIdentifier("closing-outer-list")
+        .sheet(isPresented: Binding(
+            get: { previewDate != nil },
+            set: { if !$0 { previewDate = nil } }
+        )) {
+            NativeCalendarDayPreview(date: previewDate ?? "",
+                                     record: model.calendarRows[previewDate ?? ""])
+                .presentationDetents([.medium])
+        }
     }
 }
 
 struct NativeClosingMonthCalendar: View {
     @ObservedObject var model: NativeNavigationModel
+    @State private var previewDate: String?
     let month: ClosingMonthData
     private let weekdays=["日","月","火","水","木","金","土"]
     // Fixed, non-lazy rows with unique slot IDs. This always renders days 1...last,
@@ -990,14 +1469,28 @@ struct NativeClosingMonthCalendar: View {
             }
         }
         .accessibilityIdentifier("closing-inner-calendar")
+        .sheet(isPresented: Binding(
+            get: { previewDate != nil },
+            set: { if !$0 { previewDate = nil } }
+        )) {
+            NativeCalendarDayPreview(date: previewDate ?? "",
+                                     record: model.calendarRows[previewDate ?? ""])
+                .presentationDetents([.medium])
+        }
     }
     private func calendarDay(_ day: Int) -> some View {
         let key = month.key(day)
         let row = model.calendarRows[key]
         return Button { model.openCalendarDate(key) } label: {
             VStack(alignment: .leading, spacing: 5) {
-                Text("\(day)").font(.subheadline.weight(.bold))
-                    .foregroundStyle(row?.holiday.isEmpty == false ? Color.red : Color.primary)
+                HStack(spacing: 3) {
+                    Text("\(day)").font(.subheadline.weight(.bold))
+                        .foregroundStyle(row?.holiday.isEmpty == false ? Color.red : Color.primary)
+                    Spacer(minLength: 0)
+                    Image(systemName: row?.stateSymbol ?? "questionmark.circle")
+                        .foregroundStyle(row?.stateTint ?? .gray)
+                        .font(.system(size: 10))
+                }
                 if row?.work == true && row?.leave != true {
                     Text(row?.hours ?? "")
                         .font(.system(size: 11, weight: .semibold))
@@ -1011,6 +1504,10 @@ struct NativeClosingMonthCalendar: View {
                 } else {
                     Text(closingStatus(row)).font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary).lineLimit(2)
+                    if let state = row?.approvalDescription, !state.isEmpty {
+                        Text(state).font(.system(size: 9)).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -1021,7 +1518,9 @@ struct NativeClosingMonthCalendar: View {
                 .strokeBorder(key == todayKey ? Color.accentColor : .clear, lineWidth: 1.4))
         }
         .buttonStyle(.plain)
+        .onLongPressGesture(minimumDuration: 0.55) { previewDate = key }
         .accessibilityLabel("\(day)日 \(closingStatus(row)) \(row?.hours ?? "")")
+        .accessibilityHint("長押しで勤務記録をプレビュー")
     }
     private var todayKey:String {
         let c=Calendar.current.dateComponents([.year,.month,.day],from:Date())
@@ -1034,6 +1533,7 @@ struct NativeClosingMonthCalendar: View {
 // compact row; day-to-record routing is preserved.
 private struct NativeClosingTabletopCalendar: View {
     @ObservedObject var model: NativeNavigationModel
+    @State private var previewDate: String?
     let month: ClosingMonthData
     private let weekdays = ["日","月","火","水","木","金","土"]
     private var weekCount: Int {
@@ -1062,15 +1562,16 @@ private struct NativeClosingTabletopCalendar: View {
                                         .font(.caption.weight(.semibold))
                                         .monospacedDigit()
                                         .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
-                                    Circle()
-                                        .fill(record?.leave == true ? Color.purple :
-                                              record?.work == true ? Color.green : Color.clear)
-                                        .frame(width: 4, height: 4)
+                                    Image(systemName: record?.stateSymbol ?? "questionmark.circle")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(record?.stateTint ?? .gray)
+                                        .frame(height: 11)
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 29)
                                 .background(closingColor(record), in: RoundedRectangle(cornerRadius: 7))
                             }
                             .buttonStyle(.plain)
+                            .onLongPressGesture(minimumDuration: 0.55) { previewDate = key }
                             .accessibilityLabel("\(day)日 \(closingStatus(record))")
                         } else {
                             Color.clear.frame(maxWidth: .infinity, minHeight: 29)
@@ -1080,6 +1581,14 @@ private struct NativeClosingTabletopCalendar: View {
             }
         }
         .accessibilityIdentifier("closing-tabletop-mini-calendar")
+        .sheet(isPresented: Binding(
+            get: { previewDate != nil },
+            set: { if !$0 { previewDate = nil } }
+        )) {
+            NativeCalendarDayPreview(date: previewDate ?? "",
+                                     record: model.calendarRows[previewDate ?? ""])
+                .presentationDetents([.medium])
+        }
     }
 }
 
@@ -1120,8 +1629,11 @@ struct NativeClosingScreen: View {
         }
     }
     private func mins(_ m:Int) -> String { "\(m / 60)時間\(String(format:"%02d",m % 60))分" }
-    private var leaveCount: Int {
-        model.calendarRows.values.filter { $0.known && $0.leave }.count
+    private var leaveCount: Int? {
+        let rows = model.calendarRows.values.filter {
+            $0.date.hasPrefix(model.calendarMonth + "-") && $0.known
+        }
+        return rows.isEmpty ? nil : rows.filter(\.leave).count
     }
     private func summaryTile(_ title: String, value: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1155,7 +1667,7 @@ struct NativeClosingScreen: View {
                             summaryTile("出勤", value: (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—",
                                         icon: "calendar.badge.checkmark")
                                 .accessibilityIdentifier("closing-summary-worked")
-                            summaryTile("年休", value: "\(leaveCount)日", icon: "sun.max")
+                            summaryTile("年休", value: leaveCount.map { "\($0)日" } ?? "—", icon: "sun.max")
                                 .accessibilityIdentifier("closing-summary-leave")
                             summaryTile("実労働", value: (model.summary["minutes"] as? Int).map(mins) ?? "—",
                                         icon: "clock")
@@ -1168,6 +1680,15 @@ struct NativeClosingScreen: View {
     }
     private func closingCalendar(month: ClosingMonthData) -> some View {
         NativeSurface(title: "月間カレンダー") {
+            HStack {
+                Text("長押し：プレビュー / タップ：その日の勤怠")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button { model.nativeAnalysisOpen = true } label: {
+                    Label("分析", systemImage: "chart.bar.xaxis")
+                }
+                .font(.caption)
+            }
             NativeClosingMonthCalendar(model:model,month:month)
         }
     }
@@ -1189,6 +1710,7 @@ struct NativeClosingScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 closingHeading
+                NativeSyncStatusBanner(model: model)
                 closeApplicationNotice
                 closingSummary(columns: 2)
                 closingRecords(month: month)
@@ -1220,6 +1742,7 @@ struct NativeClosingScreen: View {
                 }
                 closingSummary(columns: width >= 600 ? 4 : 2)
                 closeApplicationNotice
+                NativeSyncStatusBanner(model: model)
                 NativeClosingTabletopCalendar(model: model, month: month)
                     .padding(12)
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
@@ -1301,6 +1824,7 @@ struct NativeClosingScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
                         closingHeading
+                        NativeSyncStatusBanner(model: model)
                         closeApplicationNotice
                         if model.calendarMonth.count == 7 {
                             let month = ClosingMonthData(model.calendarMonth)
@@ -1553,6 +2077,9 @@ struct NativePreferencesScreen: View {
     @AppStorage("etc-duo-reminder-close.minute") private var closeMinute = 0
     @AppStorage("etc-duo-reminder-close.day") private var closeDay = 15
     @AppStorage("etc-duo-recovery.autoSignIn") private var autoRecovery = true
+    @AppStorage("etc-duo.templates.custom-v1") private var customTemplatesJSON = "[]"
+    @AppStorage("etc-duo.tips.break-v1") private var breakTipSeen = false
+    @AppStorage("etc-duo.tips.templates-v1") private var templateTipSeen = false
     @AppStorage("etc-duo-account.companyID") private var companyID = "pasona"
     @State private var confirmDelete = false
     @State private var credentialsSaved = CredentialVault.exists()
@@ -1662,7 +2189,28 @@ struct NativePreferencesScreen: View {
               footer: { Text("通知は確認のためのリマインダーです。勤務記録や申請状態を自動確認しません。") }
             Section("iPhone Duo") {
                 Toggle("日々勤怠にカレンダーを並べる", isOn: $model.sidebarEnabled)
+                Text("画面を開いたときはカレンダー・勤務入力・詳細を並べ、卓上時は上にサマリー、下に操作をまとめます。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                Button {
+                    model.nativeSettingsOpen = false
+                    model.nativeAnalysisOpen = true
+                } label: {
+                    Label("勤務分析を開く", systemImage: "chart.bar.xaxis")
+                }
+                Button {
+                    breakTipSeen = false
+                    templateTipSeen = false
+                } label: {
+                    Label("操作ヒントをもう一度見る", systemImage: "lightbulb")
+                }
+                Button("自分で登録した勤務パターンを消去", role: .destructive) {
+                    customTemplatesJSON = "[]"
+                }
+                .disabled(customTemplatesJSON == "[]")
+            } header: { Text("便利な機能") }
+              footer: { Text("勤務テンプレートはこのiPhoneのみに保存します。消去しても公式の勤怠記録は変わりません。") }
             Section {
                 Toggle("エラー時にFace IDなしで再ログイン", isOn: $autoRecovery)
                     .disabled(!credentialsSaved)

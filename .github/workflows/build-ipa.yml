@@ -132,6 +132,9 @@ jobs:
       - name: Test first-run walkthrough and custom company ID (v3.13)
         shell: bash
         run: cd source && node tests/first-run-setup-v313.test.cjs
+      - name: Test native productivity refresh v3.14 (excluding pre-apply checker)
+        shell: bash
+        run: cd source && node tests/productivity-v314.test.cjs
       - name: Build unsigned IPA
         shell: bash
         run: cd source && bash scripts/build-unsigned-ipa.sh

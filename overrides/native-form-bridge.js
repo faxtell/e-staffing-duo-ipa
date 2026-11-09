@@ -268,10 +268,41 @@
     }
     schedule();sendSnapshot();submissionSnapshot();return true;
   }
+  // A template changes only official editable fields, after a native
+  // confirmation. It is never a form submit or a claim of a successful save.
+  function applyTemplate(payload) {
+    const values=payload?.values;
+    const reject=()=>{post({action:'templateResult',success:false});return false;};
+    if(payload?.confirmed!==true || isLocked() || busy || failed ||
+       !values || typeof values!=='object' || Array.isArray(values)) return reject();
+    const names=Object.keys(values);
+    if(names.length!==3 || !['startTime','endTime','rstTime'].every(n=>names.includes(n))) return reject();
+    if(!/^\d{4}$/.test(values.startTime)||!/^\d{4}$/.test(values.endTime) ||
+       !/^\d{1,3}$/.test(values.rstTime)) return reject();
+    for(const n of ['startTime','endTime']) {
+      const hh=+values[n].slice(0,2),mm=+values[n].slice(2);
+      if(hh>23||mm>59)return reject();
+    }
+    if(Number(values.rstTime)>960)return reject();
+    for(const n of names)if(!editableField(n) || !('value' in field(n)))return reject();
+    const edits=names.filter(n=>String(field(n).value)!==values[n]);
+    if(!edits.length){post({action:'templateResult',success:true,changed:false});return true;}
+    for(const name of edits){
+      const input=field(name);
+      if(input instanceof HTMLInputElement && nativeSetter)nativeSetter.call(input,values[name]);
+      else input.value=values[name];
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      input.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    schedule();sendSnapshot();submissionSnapshot();
+    post({action:'templateResult',success:true,changed:true});
+    return true;
+  }
   window.__etcNativeFormAction = payload => {
     if(!payload || typeof payload!=='object')return false;
     if(payload.kind==='field') { const updated=setValue(payload.name,payload.value); if(updated) submissionSnapshot(); return updated; }
     if(payload.kind==='choice')return selectOption(payload.group,payload.index);
+    if(payload.kind==='template')return applyTemplate(payload);
     if(payload.kind==='breakRecalculate') {
       if(isLocked())return false;
       const button=form.querySelector('.etc-break-assistant-button');
