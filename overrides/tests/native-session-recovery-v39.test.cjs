@@ -41,7 +41,9 @@ assert(login.includes("url.origin === 'https://m.e-staffing.ne.jp'"),'Cross-doma
 const app=swift.split('struct TimeCardView: View')[1].split('struct OfficialTimeCardWebView')[0];
 assert(app.includes('if navigation.recoveryActive'));
 assert(app.includes('NativeSessionRecoveryScreen(model: navigation)'));
-assert(app.includes('!navigation.recoveryActive && navigation.isVisible'),'Hide bottom nav during recovery');
+const navVisibility=app.split('private var showNavigation: Bool {')[1]?.split('private var showNativeScreen: Bool {')[0] || '';
+assert(navVisibility.includes('!navigation.recoveryActive') && navVisibility.includes('navigation.isVisible'),
+  'Hide bottom nav during recovery');
 expect(screen,[
   'struct NativeSessionRecoveryScreen: View', 'native-session-recovery', 'exclamationmark.shield.fill',
   '再ログインが必要です', 'session-recovery-open-login',
