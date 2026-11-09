@@ -610,7 +610,7 @@ struct TimeCardView: View {
     }
     private var showNativeScreen: Bool {
         !navigation.recoveryActive && (navigation.isVisible || (navigation.page == "login" && navigation.nativeLoginReady)) && !navigation.showOfficial && !navigation.dashboardLoading &&
-        navigation.openingCalendarDay == nil && (navigation.nativeSettingsOpen ||
+        navigation.openingCalendarDay == nil && (navigation.nativeSettingsOpen || navigation.nativeAnalysisOpen ||
           navigation.page == "home" || navigation.page == "close" || navigation.page == "login" ||
           (navigation.page == "daily" && navigation.nativeDailyReady))
     }
@@ -642,6 +642,7 @@ struct TimeCardView: View {
                             if navigation.page == "daily" &&
                                showSidebar(geometry.size.width) &&
                                !navigation.nativeSettingsOpen &&
+                               !navigation.nativeAnalysisOpen &&
                                !navigation.calendarRows.isEmpty {
                                 NativeCalendarSidebar(model:navigation)
                                     .frame(width:min(260,geometry.size.width * 0.34))
