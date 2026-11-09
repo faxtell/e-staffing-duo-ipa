@@ -1362,20 +1362,17 @@ struct ClosingMonthData {
 private func closingStatus(_ record: NativeCalendarRecord?) -> String {
     guard let item=record else { return "未取得" }
     if !item.known { return "未取得" }
-    if item.leave { return "年休" } // Leave type must not be replaced by approval status ("済").
-    if item.work { return item.status.isEmpty ? "勤務記録あり" : item.status }
-    return item.holiday.isEmpty ? "記録なし" : item.holiday
+    return item.stateLabel
 }
 
 private func closingColor(_ record: NativeCalendarRecord?) -> Color {
     guard let r=record, r.known else { return Color(uiColor:.tertiarySystemGroupedBackground) }
-    if r.leave { return Color.purple.opacity(0.13) }
-    if r.work { return Color.green.opacity(0.12) }
-    return Color(uiColor:.secondarySystemGroupedBackground)
+    return r.stateTint.opacity(0.10)
 }
 
 struct NativeClosingList: View {
     @ObservedObject var model: NativeNavigationModel
+    @State private var previewDate: String?
     let month: ClosingMonthData
     private let weekdayNames=["日","月","火","水","木","金","土"]
     var body: some View {
@@ -1391,15 +1388,15 @@ struct NativeClosingList: View {
                             Text(weekdayNames[w]).font(.caption2)
                                 .foregroundStyle(w == 0 ? .red : w == 6 ? .blue : .secondary)
                         }.frame(width:39)
-                        RoundedRectangle(cornerRadius:2)
-                            .fill(row?.leave == true ? Color.purple : row?.work == true ? .green : .clear)
-                            .frame(width:3)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(row?.stateTint ?? .gray)
+                            .frame(width: 3)
                         VStack(alignment:.leading,spacing:5) {
                             Text(row?.leave == true ? "年休" : row?.work == true && !(row?.hours.isEmpty ?? true) ? row!.hours : closingStatus(row))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary).lineLimit(2)
                             let detail=[row?.place ?? "",(row?.rest.isEmpty == false ? "休憩 \(row!.rest)" : ""),
-                                        (row?.known == true ? row?.status ?? "" : "")]
+                                        (row?.known == true ? row?.approvalDescription ?? "" : "")]
                                 .filter{ !$0.isEmpty }.joined(separator:" · ")
                             if !detail.isEmpty {
                                 Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -1414,16 +1411,28 @@ struct NativeClosingList: View {
                     .padding(.horizontal,12).padding(.vertical,12)
                     .frame(maxWidth:.infinity,alignment:.leading)
                     .background(closingColor(row),in:RoundedRectangle(cornerRadius:14))
-                }.buttonStyle(.plain)
+                }
+                .buttonStyle(.plain)
+                .onLongPressGesture(minimumDuration: 0.55) { previewDate = key }
                 .accessibilityLabel("\(day)日 \(closingStatus(row)) \(row?.hours ?? "")")
+                .accessibilityHint("長押しで勤務記録をプレビュー")
             }
         }
         .accessibilityIdentifier("closing-outer-list")
+        .sheet(isPresented: Binding(
+            get: { previewDate != nil },
+            set: { if !$0 { previewDate = nil } }
+        )) {
+            NativeCalendarDayPreview(date: previewDate ?? "",
+                                     record: model.calendarRows[previewDate ?? ""])
+                .presentationDetents([.medium])
+        }
     }
 }
 
 struct NativeClosingMonthCalendar: View {
     @ObservedObject var model: NativeNavigationModel
+    @State private var previewDate: String?
     let month: ClosingMonthData
     private let weekdays=["日","月","火","水","木","金","土"]
     // Fixed, non-lazy rows with unique slot IDs. This always renders days 1...last,
@@ -1458,14 +1467,28 @@ struct NativeClosingMonthCalendar: View {
             }
         }
         .accessibilityIdentifier("closing-inner-calendar")
+        .sheet(isPresented: Binding(
+            get: { previewDate != nil },
+            set: { if !$0 { previewDate = nil } }
+        )) {
+            NativeCalendarDayPreview(date: previewDate ?? "",
+                                     record: model.calendarRows[previewDate ?? ""])
+                .presentationDetents([.medium])
+        }
     }
     private func calendarDay(_ day: Int) -> some View {
         let key = month.key(day)
         let row = model.calendarRows[key]
         return Button { model.openCalendarDate(key) } label: {
             VStack(alignment: .leading, spacing: 5) {
-                Text("\(day)").font(.subheadline.weight(.bold))
-                    .foregroundStyle(row?.holiday.isEmpty == false ? Color.red : Color.primary)
+                HStack(spacing: 3) {
+                    Text("\(day)").font(.subheadline.weight(.bold))
+                        .foregroundStyle(row?.holiday.isEmpty == false ? Color.red : Color.primary)
+                    Spacer(minLength: 0)
+                    Image(systemName: row?.stateSymbol ?? "questionmark.circle")
+                        .foregroundStyle(row?.stateTint ?? .gray)
+                        .font(.system(size: 10))
+                }
                 if row?.work == true && row?.leave != true {
                     Text(row?.hours ?? "")
                         .font(.system(size: 11, weight: .semibold))
@@ -1479,6 +1502,10 @@ struct NativeClosingMonthCalendar: View {
                 } else {
                     Text(closingStatus(row)).font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary).lineLimit(2)
+                    if let state = row?.approvalDescription, !state.isEmpty {
+                        Text(state).font(.system(size: 9)).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -1489,7 +1516,9 @@ struct NativeClosingMonthCalendar: View {
                 .strokeBorder(key == todayKey ? Color.accentColor : .clear, lineWidth: 1.4))
         }
         .buttonStyle(.plain)
+        .onLongPressGesture(minimumDuration: 0.55) { previewDate = key }
         .accessibilityLabel("\(day)日 \(closingStatus(row)) \(row?.hours ?? "")")
+        .accessibilityHint("長押しで勤務記録をプレビュー")
     }
     private var todayKey:String {
         let c=Calendar.current.dateComponents([.year,.month,.day],from:Date())
@@ -1502,6 +1531,7 @@ struct NativeClosingMonthCalendar: View {
 // compact row; day-to-record routing is preserved.
 private struct NativeClosingTabletopCalendar: View {
     @ObservedObject var model: NativeNavigationModel
+    @State private var previewDate: String?
     let month: ClosingMonthData
     private let weekdays = ["日","月","火","水","木","金","土"]
     private var weekCount: Int {
@@ -1530,15 +1560,16 @@ private struct NativeClosingTabletopCalendar: View {
                                         .font(.caption.weight(.semibold))
                                         .monospacedDigit()
                                         .foregroundStyle(record?.holiday.isEmpty == false ? Color.red : Color.primary)
-                                    Circle()
-                                        .fill(record?.leave == true ? Color.purple :
-                                              record?.work == true ? Color.green : Color.clear)
-                                        .frame(width: 4, height: 4)
+                                    Image(systemName: record?.stateSymbol ?? "questionmark.circle")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(record?.stateTint ?? .gray)
+                                        .frame(height: 11)
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 29)
                                 .background(closingColor(record), in: RoundedRectangle(cornerRadius: 7))
                             }
                             .buttonStyle(.plain)
+                            .onLongPressGesture(minimumDuration: 0.55) { previewDate = key }
                             .accessibilityLabel("\(day)日 \(closingStatus(record))")
                         } else {
                             Color.clear.frame(maxWidth: .infinity, minHeight: 29)
@@ -1548,6 +1579,14 @@ private struct NativeClosingTabletopCalendar: View {
             }
         }
         .accessibilityIdentifier("closing-tabletop-mini-calendar")
+        .sheet(isPresented: Binding(
+            get: { previewDate != nil },
+            set: { if !$0 { previewDate = nil } }
+        )) {
+            NativeCalendarDayPreview(date: previewDate ?? "",
+                                     record: model.calendarRows[previewDate ?? ""])
+                .presentationDetents([.medium])
+        }
     }
 }
 
@@ -1588,8 +1627,11 @@ struct NativeClosingScreen: View {
         }
     }
     private func mins(_ m:Int) -> String { "\(m / 60)時間\(String(format:"%02d",m % 60))分" }
-    private var leaveCount: Int {
-        model.calendarRows.values.filter { $0.known && $0.leave }.count
+    private var leaveCount: Int? {
+        let rows = model.calendarRows.values.filter {
+            $0.date.hasPrefix(model.calendarMonth + "-") && $0.known
+        }
+        return rows.isEmpty ? nil : rows.filter(\.leave).count
     }
     private func summaryTile(_ title: String, value: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1623,7 +1665,7 @@ struct NativeClosingScreen: View {
                             summaryTile("出勤", value: (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—",
                                         icon: "calendar.badge.checkmark")
                                 .accessibilityIdentifier("closing-summary-worked")
-                            summaryTile("年休", value: "\(leaveCount)日", icon: "sun.max")
+                            summaryTile("年休", value: leaveCount.map { "\($0)日" } ?? "—", icon: "sun.max")
                                 .accessibilityIdentifier("closing-summary-leave")
                             summaryTile("実労働", value: (model.summary["minutes"] as? Int).map(mins) ?? "—",
                                         icon: "clock")
@@ -1636,6 +1678,15 @@ struct NativeClosingScreen: View {
     }
     private func closingCalendar(month: ClosingMonthData) -> some View {
         NativeSurface(title: "月間カレンダー") {
+            HStack {
+                Text("長押し：プレビュー / タップ：その日の勤怠")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button { model.nativeAnalysisOpen = true } label: {
+                    Label("分析", systemImage: "chart.bar.xaxis")
+                }
+                .font(.caption)
+            }
             NativeClosingMonthCalendar(model:model,month:month)
         }
     }
