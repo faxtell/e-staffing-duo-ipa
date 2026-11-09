@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import Charts
 
 // Native front-end.  The single official WKWebView remains mounted behind it;
 // the bridge sends only explicitly allowed UI field values and choice indices.
@@ -9,6 +10,8 @@ struct NativeApplicationScreen: View {
         Group {
             if model.nativeSettingsOpen {
                 NativePreferencesScreen(model:model)
+            } else if model.nativeAnalysisOpen {
+                NativeAnalyticsScreen(model:model)
             } else {
                 switch model.page {
                 case "login": NativeLoginScreen(model:model)
@@ -111,6 +114,111 @@ private struct NativeSurface<Content: View>: View {
     }
 }
 
+// A single official-state vocabulary is reused on the home, calendar,
+// analytics and the date preview. Unfetched periods never become zeroes.
+private struct NativeSyncStatusBanner: View {
+    @ObservedObject var model: NativeNavigationModel
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: model.nativeSaveState == "error" ? "exclamationmark.triangle.fill" :
+                  model.navigationInProgress ? "arrow.triangle.2.circlepath" : "checkmark.shield")
+                .foregroundStyle(model.nativeSaveState == "error" ? Color.orange : Color.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.nativeSyncStatus).font(.caption.weight(.semibold))
+                if let date = model.page == "daily" ? model.lastOfficialDailyAt :
+                              model.page == "home" ? model.lastOfficialDashboardAt :
+                              model.lastOfficialCalendarAt {
+                    Text("公式画面から最終取得：" +
+                         date.formatted(date: .omitted, time: .shortened))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 13))
+        .accessibilityIdentifier("native-sync-status")
+    }
+}
+
+struct NativeCalendarDayPreview: View {
+    let date: String
+    let record: NativeCalendarRecord?
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 11) {
+                        Image(systemName: record?.stateSymbol ?? "questionmark.circle")
+                            .font(.title2).foregroundStyle(record?.stateTint ?? .secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(record?.stateLabel ?? "未取得")
+                                .font(.title3.bold())
+                            Text(date).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    if let record, record.known {
+                        if !record.hours.isEmpty {
+                            LabeledContent("勤務時間", value: record.hours)
+                        }
+                        if !record.rest.isEmpty {
+                            LabeledContent("休憩", value: record.rest + "分")
+                        }
+                        if !record.place.isEmpty {
+                            LabeledContent("就業場所", value: record.place)
+                        }
+                        if !record.approvalDescription.isEmpty {
+                            LabeledContent("申請状態", value: record.approvalDescription)
+                        }
+                        if !record.holiday.isEmpty {
+                            LabeledContent("休日情報", value: record.holiday)
+                        }
+                    } else {
+                        Label("この日付の公式データはまだ取得されていません。",
+                              systemImage: "info.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("表示内容は公式画面から取得できた情報のみです。長押ししても申請や保存は行いません。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(20)
+            }
+            .navigationTitle("勤務記録のプレビュー")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") { dismiss() }
+                }
+            }
+        }
+        .accessibilityIdentifier("native-calendar-day-preview")
+    }
+}
+
+private struct NativeWorkTemplate: Codable, Identifiable, Equatable {
+    var id: String
+    var name: String
+    var startTime: String
+    var endTime: String
+    var breakMinutes: String
+
+    static let presets: [NativeWorkTemplate] = [
+        .init(id: "default", name: "通常勤務", startTime: "0900", endTime: "1730", breakMinutes: "60"),
+        .init(id: "late", name: "遅番", startTime: "1100", endTime: "1930", breakMinutes: "60"),
+        .init(id: "short", name: "時短勤務", startTime: "0900", endTime: "1500", breakMinutes: "0")
+    ]
+    private func time(_ raw: String) -> String {
+        guard raw.count == 4 else { return raw }
+        return String(raw.prefix(2)) + ":" + String(raw.suffix(2))
+    }
+    var summary: String {
+        time(startTime) + "〜" + time(endTime) + " · 休憩" + breakMinutes + "分"
+    }
+}
+
 struct NativeHomeScreen: View {
     @ObservedObject var model: NativeNavigationModel
     @AppStorage("etc-duo-v296-salary.enabled") private var salaryEnabled = false
@@ -118,64 +226,260 @@ struct NativeHomeScreen: View {
     @AppStorage("etc-duo-v296-salary.premium") private var premium = true
     @State private var salaryHidden = false
 
-    private var salaryValid: Bool {
-        guard let worked=model.summary["worked"] as? Int,
-              let valid=model.summary["valid"] as? Int else{return false}
-        return valid == worked && model.summary["minutes"] is Int && model.summary["overtimeMinutes"] is Int
+    private var salaryValid: Bool { model.hasCompleteMonth }
+    private var payroll: (Int, Int, Int) {
+        let mins = model.summary["minutes"] as? Int ?? 0
+        let overtime = model.summary["overtimeMinutes"] as? Int ?? 0
+        let hourly = Double(rate)
+        let base = Double(mins) * hourly / 60
+        let uplift = premium ? Double(overtime) * hourly / 60 * 0.25 : 0
+        return (Int((base + uplift).rounded()),
+                Int((Double(overtime) * hourly / 60 + uplift).rounded()),
+                Int(uplift.rounded()))
     }
-    private var payroll: (Int,Int,Int) {
-        let mins=model.summary["minutes"] as? Int ?? 0
-        let overtime=model.summary["overtimeMinutes"] as? Int ?? 0
-        let hourly=Double(rate)
-        let base=Double(mins)*hourly/60.0
-        let uplift=premium ? Double(overtime)*hourly/60.0*0.25 : 0
-        let overtimePay=Double(overtime)*hourly/60.0+uplift
-        return (Int((base+uplift).rounded()),Int(overtimePay.rounded()),Int(uplift.rounded()))
+    private func currency(_ amount: Int) -> String {
+        amount.formatted(.currency(code: "JPY").precision(.fractionLength(0)))
     }
-    private func currency(_ amount:Int)->String {amount.formatted(.currency(code:"JPY").precision(.fractionLength(0)))}
-    private func readable(_ number:Int)->String { salaryHidden ? "•••••" : currency(number) }
-    private func minutes(_ number:Int)->String {"\(number/60)時間\(String(format:"%02d",number%60))分"}
+    private func readable(_ number: Int) -> String {
+        salaryHidden ? "•••••" : currency(number)
+    }
+    private func minutes(_ number: Int) -> String {
+        "\(number / 60)時間" + String(format: "%02d", number % 60) + "分"
+    }
+    private var greeting: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        return hour < 11 ? "おはようございます。" :
+               hour < 18 ? "こんにちは。" : "おつかれさまです。"
+    }
+    private var todayKey: String {
+        Date().formatted(.iso8601.year().month().day().dateSeparator(.dash))
+    }
+    private var todayRecord: NativeCalendarRecord? { model.calendarRows[todayKey] }
+    private var todayStatus: String {
+        if let record = todayRecord, record.known { return record.stateLabel }
+        return model.todayConfirmedState
+    }
+    private var knownCoverage: Bool { model.summary["coverage"] as? String == "month" }
+    private var pendingCount: Int? { model.summary["pending"] as? Int }
+    private var unsentCount: Int? { model.summary["unsent"] as? Int }
+    private func metric(_ title: String, value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: icon)
+                .font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(.title3, design: .rounded, weight: .semibold))
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+        }
+        .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+        .padding(13)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 15))
+    }
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:16) {
-                Text("ホーム").font(.largeTitle.bold())
-                if let start=model.summary["start"] as? String,let end=model.summary["end"] as? String {
-                    Text("\(start) 〜 \(end)").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 15) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("WebTimeCard").font(.caption.weight(.semibold)).foregroundStyle(.tint)
+                    Text(greeting)
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                    Text(Date.now.formatted(date: .complete, time: .omitted))
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-                NativeSurface(title:"勤務ダッシュボード") {
-                    LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:16) {
-                        metric("勤務日数",value:(model.summary["worked"] as? Int).map{"\($0)日"} ?? "—",icon:"calendar")
-                        metric("記録なし",value:(model.summary["empty"] as? Int).map{"\($0)日"} ?? "—",icon:"calendar.badge.exclamationmark")
-                        metric("実労働",value:salaryValid ? minutes(model.summary["minutes"] as? Int ?? 0) : "—",icon:"clock")
-                        metric("残業",value:salaryValid ? minutes(model.summary["overtimeMinutes"] as? Int ?? 0) : "—",icon:"moon.stars")
+                .padding(.bottom, 2)
+                NativeSurface(title: "今日の勤怠") {
+                    HStack(alignment: .center) {
+                        Label(todayStatus,
+                              systemImage: todayRecord?.stateSymbol ?? "calendar.badge.clock")
+                            .font(.headline)
+                            .foregroundStyle(todayRecord?.stateTint ?? Color.primary)
+                        Spacer()
+                        Text("公式データに基づく表示")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if let rec = todayRecord, rec.known, !rec.hours.isEmpty {
+                        Text(rec.hours)
+                            .font(.system(.title, design: .rounded, weight: .semibold))
+                            .monospacedDigit()
+                    } else {
+                        Text("開始 --:--   終了 --:--")
+                            .font(.system(.title3, design: .rounded, weight: .medium))
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Button { model.navigate("daily") } label: {
+                        Label("日々勤怠を開く", systemImage: "square.and.pencil")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .accessibilityIdentifier("home-open-daily")
+                    if todayRecord == nil && model.todayConfirmedState == "未確認" {
+                        Text("今日の記録は未確認です。未入力と断定しません。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                HStack(spacing: 9) {
+                    metric("出勤日数", value: (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—",
+                           icon: "calendar.badge.checkmark")
+                    metric("未送信", value: unsentCount.map { "\($0)件" } ?? "未確認",
+                           icon: "tray.full")
+                }
+                HStack(spacing: 9) {
+                    metric("申請確認中", value: pendingCount.map { "\($0)件" } ?? "未確認",
+                           icon: "clock.badge.checkmark")
+                    metric("実働", value: salaryValid ?
+                           minutes(model.summary["minutes"] as? Int ?? 0) : "—",
+                           icon: "clock")
+                }
+                if !knownCoverage {
+                    Label("集計は一部期間のみです。未取得の日を0日・0時間として扱いません。",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                NativeSurface(title: "クイックアクセス") {
+                    HStack(spacing: 10) {
+                        Button { model.navigate("close") } label: {
+                            Label("締め申請", systemImage: "checkmark.rectangle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        Button { model.nativeAnalysisOpen = true } label: {
+                            Label("勤務分析", systemImage: "chart.bar.xaxis")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("home-open-analytics")
+                    }
+                }
+                NativeSyncStatusBanner(model: model)
                 if salaryEnabled && rate > 0 {
-                    NativeSurface(title:"給与目安") {
-                        HStack(alignment:.firstTextBaseline) {
-                            VStack(alignment:.leading,spacing:6) {
-                                Text(salaryValid ? readable(payroll.0) : "—").font(.system(.title,design:.rounded,weight:.bold))
-                                Text("給与の概算").font(.caption).foregroundStyle(.secondary)
+                    NativeSurface(title: "給与目安") {
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(salaryValid ? readable(payroll.0) : "—")
+                                    .font(.system(.title, design: .rounded, weight: .bold))
+                                Text("給与の概算・公式の確定額ではありません")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Button { salaryHidden.toggle() } label: {
-                                Image(systemName:salaryHidden ? "eye.slash" : "eye").font(.title3)
-                            }.accessibilityLabel(salaryHidden ? "金額を表示" : "金額を隠す")
+                                Image(systemName: salaryHidden ? "eye.slash" : "eye")
+                            }
+                            .accessibilityLabel(salaryHidden ? "金額を表示" : "金額を隠す")
                         }
                         Divider()
-                        HStack {Text("残業代");Spacer();Text(salaryValid ? readable(payroll.1) : "—").bold()}
-                        HStack {Text("うち割増分");Spacer();Text(salaryValid ? readable(payroll.2) : "—").bold()}
+                        HStack {
+                            Text("残業代"); Spacer()
+                            Text(salaryValid ? readable(payroll.1) : "—").bold()
+                        }
+                        HStack {
+                            Text("うち割増分"); Spacer()
+                            Text(salaryValid ? readable(payroll.2) : "—").bold()
+                        }
                     }
                 }
-            }.padding(16).frame(maxWidth:750)
-                .frame(maxWidth:.infinity)
+            }
+            .padding(16)
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
         }
+        .accessibilityIdentifier("native-home-priority-dashboard")
     }
-    private func metric(_ title:String,value:String,icon:String)->some View {
-        VStack(alignment:.leading,spacing:8) {
-            Label(title,systemImage:icon).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.system(.title3,design:.rounded,weight:.semibold)).minimumScaleFactor(0.75).lineLimit(1)
-        }.frame(maxWidth:.infinity,alignment:.leading)
+}
+
+private struct NativeAnalysisDatum: Identifiable {
+    let name: String
+    let count: Int
+    var id: String { name }
+}
+
+struct NativeAnalyticsScreen: View {
+    @ObservedObject var model: NativeNavigationModel
+    private var fullMonth: Bool { model.summary["coverage"] as? String == "month" }
+    private var completeHours: Bool { model.hasCompleteMonth }
+    private var filteredRows: [NativeCalendarRecord] {
+        model.calendarRows.values
+            .filter { $0.date.hasPrefix(model.calendarMonth + "-") }
+    }
+    private var knownRows: [NativeCalendarRecord] { filteredRows.filter(\.known) }
+    private var chartRows: [NativeAnalysisDatum] {
+        let rows = knownRows
+        return [
+            .init(name: "出勤", count: rows.filter { $0.work && !$0.leave }.count),
+            .init(name: "年休", count: rows.filter(\.leave).count),
+            .init(name: "その他", count: rows.filter { !$0.work && !$0.leave }.count)
+        ]
+    }
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(.title2, design: .rounded, weight: .semibold))
+                .monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color(uiColor: .tertiarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 14))
+    }
+    private func time(_ key: String) -> String {
+        guard completeHours, let value = model.summary[key] as? Int else { return "—" }
+        return "\(value / 60)時間\(String(format: "%02d", value % 60))分"
+    }
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("勤務分析")
+                            .font(.largeTitle.bold())
+                        Text(fullMonth ? "月間集計" : "取得済み期間の集計")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { model.navigate("home") } label: {
+                        Label("ホーム", systemImage: "house")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                NativeSurface(title: "公式データの集計") {
+                    HStack(spacing: 10) {
+                        metric("出勤", (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—")
+                        metric("有休", knownRows.isEmpty ? "—" :
+                               "\(knownRows.filter(\.leave).count)日")
+                    }
+                    HStack(spacing: 10) {
+                        metric("実働時間", time("minutes"))
+                        metric("残業時間", time("overtimeMinutes"))
+                    }
+                    if !completeHours {
+                        Label("勤務時間は、全期間と全勤務記録の取得・検証が完了した場合のみ表示します。",
+                              systemImage: "info.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                NativeSurface(title: "取得した勤務記録の内訳") {
+                    if knownRows.isEmpty {
+                        ContentUnavailableView("記録をまだ取得していません",
+                            systemImage: "chart.bar.xaxis",
+                            description: Text("締め申請画面で公式の勤務記録を読み込むと表示できます。"))
+                    } else {
+                        Chart(chartRows) { datum in
+                            BarMark(
+                                x: .value("種類", datum.name),
+                                y: .value("日数", datum.count)
+                            )
+                            .foregroundStyle(by: .value("種類", datum.name))
+                        }
+                        .frame(height: 195)
+                        .accessibilityIdentifier("analytics-official-status-chart")
+                        Text("取得済み \(knownRows.count)日・未取得 \(filteredRows.filter { !$0.known }.count)日")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                NativeSyncStatusBanner(model: model)
+                Text("この分析はe-staffingの公式画面から取得できた範囲の参考表示です。給与や申請の確定記録とは異なります。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(16).frame(maxWidth: 760).frame(maxWidth: .infinity)
+        }
+        .accessibilityIdentifier("native-monthly-analytics")
     }
 }
 
