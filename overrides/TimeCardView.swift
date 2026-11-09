@@ -606,7 +606,9 @@ struct TimeCardView: View {
     }
 
     private var showNavigation: Bool {
-        !navigation.recoveryActive && navigation.isVisible && !navigation.sheetOpen && !navigation.dashboardLoading && navigation.openingCalendarDay == nil
+        !navigation.recoveryActive && !navigation.nativeAnalysisOpen &&
+        navigation.isVisible && !navigation.sheetOpen &&
+        !navigation.dashboardLoading && navigation.openingCalendarDay == nil
     }
     private var showNativeScreen: Bool {
         !navigation.recoveryActive && (navigation.isVisible || (navigation.page == "login" && navigation.nativeLoginReady)) && !navigation.showOfficial && !navigation.dashboardLoading &&

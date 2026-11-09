@@ -289,11 +289,14 @@ struct NativeHomeScreen: View {
                     HStack(alignment: .center) {
                         Label(todayStatus,
                               systemImage: todayRecord?.stateSymbol ?? "calendar.badge.clock")
-                            .font(.headline)
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(todayRecord?.stateTint ?? Color.primary)
-                        Spacer()
-                        Text("公式データに基づく表示")
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background((todayRecord?.stateTint ?? Color.gray).opacity(0.10),
+                                        in: Capsule())
+                            .accessibilityIdentifier("home-today-state")
+                        Spacer(minLength: 0)
                     }
                     if let rec = todayRecord, rec.known, !rec.hours.isEmpty {
                         Text(rec.hours)
@@ -304,50 +307,63 @@ struct NativeHomeScreen: View {
                             .font(.system(.title3, design: .rounded, weight: .medium))
                             .monospacedDigit().foregroundStyle(.secondary)
                     }
-                    Button { model.navigate("daily") } label: {
-                        Label("日々勤怠を開く", systemImage: "square.and.pencil")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
-                    .accessibilityIdentifier("home-open-daily")
+                    // 「日々勤怠」は常時下部メニューにあるため、
+                    // ホームには同じ移動ボタンを重ねて表示しない。
                     if todayRecord == nil && model.todayConfirmedState == "未確認" {
                         Text("今日の記録は未確認です。未入力と断定しません。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                HStack(spacing: 9) {
-                    metric("出勤日数", value: (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—",
-                           icon: "calendar.badge.checkmark")
-                    metric("未送信", value: unsentCount.map { "\($0)件" } ?? "未確認",
-                           icon: "tray.full")
-                }
-                HStack(spacing: 9) {
-                    metric("申請確認中", value: pendingCount.map { "\($0)件" } ?? "未確認",
-                           icon: "clock.badge.checkmark")
-                    metric("実働", value: salaryValid ?
-                           minutes(model.summary["minutes"] as? Int ?? 0) : "—",
-                           icon: "clock")
-                }
-                if !knownCoverage {
-                    Label("集計は一部期間のみです。未取得の日を0日・0時間として扱いません。",
-                          systemImage: "info.circle")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                NativeSurface(title: "クイックアクセス") {
-                    HStack(spacing: 10) {
-                        Button { model.navigate("close") } label: {
-                            Label("締め申請", systemImage: "checkmark.rectangle")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        Button { model.nativeAnalysisOpen = true } label: {
-                            Label("勤務分析", systemImage: "chart.bar.xaxis")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("home-open-analytics")
+                NativeSurface(title: "今月のサマリー") {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                                        GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        metric("出勤日数", value: (model.summary["worked"] as? Int).map { "\($0)日" } ?? "—",
+                               icon: "calendar.badge.checkmark")
+                        metric("未送信", value: unsentCount.map { "\($0)件" } ?? "未確認",
+                               icon: "tray.full")
+                        metric("申請確認中", value: pendingCount.map { "\($0)件" } ?? "未確認",
+                               icon: "clock.badge.checkmark")
+                        metric("実働", value: salaryValid ?
+                               minutes(model.summary["minutes"] as? Int ?? 0) : "—",
+                               icon: "clock")
+                    }
+                    if !knownCoverage {
+                        Label("一部期間のみ取得。未取得分は0日・0時間に含めません。",
+                              systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
+                // 下部メニューにある画面への重複リンクは作らない。
+                // 勤務分析はメニューにないため、独立した1つの導線として残す。
+                Button { model.nativeAnalysisOpen = true } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.tint)
+                            .frame(width: 46, height: 46)
+                            .background(Color.accentColor.opacity(0.10),
+                                        in: RoundedRectangle(cornerRadius: 14))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("勤務分析")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text("実働・残業・有休をひとまとめに")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(16)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 20))
+                    .contentShape(RoundedRectangle(cornerRadius: 20))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("home-open-analytics")
                 NativeSyncStatusBanner(model: model)
                 if salaryEnabled && rate > 0 {
                     NativeSurface(title: "給与目安") {
@@ -433,10 +449,11 @@ struct NativeAnalyticsScreen: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button { model.navigate("home") } label: {
-                        Label("ホーム", systemImage: "house")
+                    Button { model.nativeAnalysisOpen = false } label: {
+                        Label("閉じる", systemImage: "xmark")
                     }
                     .buttonStyle(.bordered)
+                    .accessibilityIdentifier("analytics-close")
                 }
                 NativeSurface(title: "公式データの集計") {
                     HStack(spacing: 10) {
@@ -1680,15 +1697,8 @@ struct NativeClosingScreen: View {
     }
     private func closingCalendar(month: ClosingMonthData) -> some View {
         NativeSurface(title: "月間カレンダー") {
-            HStack {
-                Text("長押し：プレビュー / タップ：その日の勤怠")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Button { model.nativeAnalysisOpen = true } label: {
-                    Label("分析", systemImage: "chart.bar.xaxis")
-                }
-                .font(.caption)
-            }
+            Text("タップで日々勤怠へ · 長押しでプレビュー")
+                .font(.caption2).foregroundStyle(.secondary)
             NativeClosingMonthCalendar(model:model,month:month)
         }
     }
@@ -2194,12 +2204,6 @@ struct NativePreferencesScreen: View {
             }
             Section {
                 Button {
-                    model.nativeSettingsOpen = false
-                    model.nativeAnalysisOpen = true
-                } label: {
-                    Label("勤務分析を開く", systemImage: "chart.bar.xaxis")
-                }
-                Button {
                     breakTipSeen = false
                     templateTipSeen = false
                 } label: {
@@ -2209,8 +2213,8 @@ struct NativePreferencesScreen: View {
                     customTemplatesJSON = "[]"
                 }
                 .disabled(customTemplatesJSON == "[]")
-            } header: { Text("便利な機能") }
-              footer: { Text("勤務テンプレートはこのiPhoneのみに保存します。消去しても公式の勤怠記録は変わりません。") }
+            } header: { Text("操作ヒントと勤務パターン") }
+              footer: { Text("登録した勤務パターンはこのiPhoneのみに保存されます。消去しても公式の勤怠記録には影響しません。") }
             Section {
                 Toggle("エラー時にFace IDなしで再ログイン", isOn: $autoRecovery)
                     .disabled(!credentialsSaved)
