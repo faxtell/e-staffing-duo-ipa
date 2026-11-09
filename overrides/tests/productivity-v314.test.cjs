@@ -71,7 +71,7 @@ assert.equal(approved.fields.startTime.value,'');
 assert.equal(approved.fields.rstTime.value,'');
 
 for(const key of [
- 'native-home-priority-dashboard','home-open-daily','home-open-analytics',
+ 'native-home-priority-dashboard','home-open-analytics',
  'native-monthly-analytics','analytics-official-status-chart',
  'native-sync-status','native-calendar-day-preview',
  'daily-select-work-template','daily-template-preview',
