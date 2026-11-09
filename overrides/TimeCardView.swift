@@ -21,6 +21,47 @@ struct NativeCalendarRecord: Identifiable {
     let holiday: String
     var id: String { date }
 
+    // Only the original site's explicit status justifies "承認済".
+    // A generic short "済" is not treated as proof of approval.
+    var stateLabel: String {
+        if !known { return "未取得" }
+        if leave { return "年休" }
+        if status.contains("差戻") { return "差戻し" }
+        if status.contains("承認済") { return "承認済" }
+        if status.contains("申請済") || status.contains("申請中") { return "申請済み・確認待ち" }
+        if status.contains("一時保存") || status.contains("保存中") { return "一時保存" }
+        if work { return "勤務記録あり" }
+        if !holiday.isEmpty { return "休日" }
+        return "未入力"
+    }
+    var stateSymbol: String {
+        if !known { return "questionmark.circle" }
+        if leave { return "sun.max.fill" }
+        if status.contains("差戻") { return "arrow.uturn.backward.circle.fill" }
+        if status.contains("承認済") { return "checkmark.seal.fill" }
+        if status.contains("申請済") || status.contains("申請中") { return "clock.badge.checkmark" }
+        if work { return "clock.fill" }
+        if !holiday.isEmpty { return "moon.stars" }
+        return "circle.dashed"
+    }
+    var stateTint: Color {
+        if !known { return .gray }
+        if leave { return .purple }
+        if status.contains("差戻") { return .orange }
+        if status.contains("承認済") { return .green }
+        if status.contains("申請済") || status.contains("申請中") { return .blue }
+        if work { return .teal }
+        return .secondary
+    }
+    var approvalDescription: String {
+        if status.contains("承認済") { return "承認済" }
+        if status.contains("申請済") || status.contains("申請中") { return "申請済み・確認待ち" }
+        if status.contains("差戻") { return "差戻し" }
+        if status.contains("一時保存") { return "一時保存" }
+        if status == "済" { return "処理済（詳細未確認）" }
+        return status
+    }
+
     init?(value: [String: Any], month: String) {
         guard let date = value["date"] as? String,
               date.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
@@ -179,6 +220,10 @@ final class NativeNavigationModel: ObservableObject {
     @Published var nativeDailyCategoryDisplay = ""
     @Published var nativeDailyWorkplaceDisplay = ""
     @Published var nativeSaveState = "idle"
+    @Published var nativeTemplateMessage = ""
+    @Published var lastOfficialDailyAt: Date?
+    @Published var lastOfficialDashboardAt: Date?
+    @Published var lastOfficialCalendarAt: Date?
     @Published var nativeDayTitle = ""
     @Published var nativeCanSave = false
     @Published var nativeCanDailyApply = false
@@ -189,6 +234,7 @@ final class NativeNavigationModel: ObservableObject {
     @Published var nativeSubmissionMessage = ""
     @Published var nativeSubmissionInFlight = false
     @Published var nativeSettingsOpen = false
+    @Published var nativeAnalysisOpen = false
     @Published var showOnboarding = false
     @Published var nativeLoginReady = false
     @Published var recoveryActive = false
@@ -231,12 +277,14 @@ final class NativeNavigationModel: ObservableObject {
         }
         calendarMonth = month
         calendarRows = merged
+        lastOfficialCalendarAt = Date()
         return true
     }
 
     func resetCalendar() {
         calendarRows = [:]
         calendarMonth = ""
+        lastOfficialCalendarAt = nil
     }
 
     weak var webView: WKWebView?
@@ -257,6 +305,43 @@ final class NativeNavigationModel: ObservableObject {
               let overtime = aggregate["overtimeMinutes"] as? Int,
               (0...65*24*60).contains(overtime), overtime <= minutes else { return }
         summary = aggregate
+        lastOfficialDashboardAt = Date()
+    }
+
+    var hasCompleteMonth: Bool {
+        summary["coverage"] as? String == "month" &&
+        summary["valid"] as? Int == summary["worked"] as? Int
+    }
+    var todayConfirmedState: String {
+        let raw = (summary["todayStatus"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.contains("承認済") { return "承認済" }
+        if raw.contains("申請済") || raw.contains("申請中") { return "申請済み・確認待ち" }
+        if raw.contains("差戻") { return "差戻し" }
+        if raw.contains("未入力") { return "未入力" }
+        if raw.isEmpty || raw.contains("未確認") || raw.contains("対象期間外") { return "未確認" }
+        return raw == "済" ? "詳細未確認" : "公式表示：" + String(raw.prefix(30))
+    }
+    var nativeSyncStatus: String {
+        if recoveryActive { return "接続を復旧しています" }
+        if navigationInProgress { return "公式画面の読み込み中" }
+        if page == "daily" {
+            switch nativeSaveState {
+            case "locked": return "公式の閲覧専用記録"
+            case "pending": return "変更あり・一時保存待ち"
+            case "sending": return "公式へ保存処理中"
+            case "verify": return "保存結果は未確認"
+            case "error": return "保存処理エラー"
+            case "local": return "入力内容のみ・保存未確認"
+            default: return lastOfficialDailyAt == nil ? "公式記録を取得中" : "公式画面と照合済み・保存は未確認"
+            }
+        }
+        if nativeSubmissionInFlight { return "申請処理中・結果未確認" }
+        if page == "home" {
+            return lastOfficialDashboardAt == nil ? "集計を取得中" :
+                "公式画面から集計取得済み" +
+                (summary["coverage"] as? String == "month" ? "" : "（一部期間）")
+        }
+        return lastOfficialCalendarAt == nil ? "勤務記録を取得中" : "公式画面から記録取得済み"
     }
 
     func publishNativeSalary() {
@@ -373,6 +458,7 @@ final class NativeNavigationModel: ObservableObject {
         nativeDailyLocked = locked
         nativeDailyApprovalStatus = String((payload["approvalStatus"] as? String ?? "").prefix(40))
         nativeDailyFields = fields
+        lastOfficialDailyAt = Date()
         nativeCategory = locked ? [] : (category["options"] as? [[String: Any]] ?? [])
         nativeWorkplace = locked ? [] : (workplace["options"] as? [[String: Any]] ?? [])
         nativeDailyCategoryDisplay = String((category["value"] as? String ?? "").prefix(100))
@@ -385,6 +471,7 @@ final class NativeNavigationModel: ObservableObject {
     }
 
     func navigate(_ destination: String) {
+        nativeAnalysisOpen = false
         if destination == "settings" {
             nativeSettingsOpen = true
             showOfficial = false
@@ -431,6 +518,8 @@ final class NativeNavigationModel: ObservableObject {
                 nativeDailyCategoryDisplay = ""
                 nativeDailyWorkplaceDisplay = ""
                 nativeDailyApprovalStatus = ""
+                nativeTemplateMessage = ""
+                lastOfficialDailyAt = nil
             }
             nativeCanDailyApply = false
             nativeCanCloseApply = false
@@ -1131,6 +1220,12 @@ struct OfficialTimeCardWebView: UIViewRepresentable {
                         currentURL.path.contains("TMSINP02") else { return }
                 if action == "dailySnapshot" {
                     navigation.receiveDaily(payload)
+                } else if action == "templateResult" {
+                    if let success = payload["success"] as? Bool {
+                        navigation.nativeTemplateMessage = success ?
+                            "テンプレートを入力欄に反映しました。保存結果は未確認です。" :
+                            "反映できませんでした。公式画面で入力可否をご確認ください。"
+                    }
                 } else if action == "saveState", let state = payload["status"] as? String {
                     navigation.nativeSaveState = state
                 } else if action == "submissionSnapshot" || action == "submissionState" {
